@@ -41,6 +41,8 @@
 ## Quick Start (Docker)
 
 ```bash
+git clone https://github.com/vechain/vebetterdao-relayer-node.git
+cd vebetterdao-relayer-node
 docker build -t vbd-relayer .
 
 # Testnet (default)
