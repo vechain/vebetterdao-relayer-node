@@ -6,7 +6,7 @@
  * Env:
  *   MNEMONIC             BIP39 phrase (space-separated)
  *   RELAYER_PRIVATE_KEY   Hex private key (alternative to MNEMONIC)
- *   RELAYER_NETWORK       mainnet | testnet-staging (default: testnet-staging)
+ *   RELAYER_NETWORK       mainnet | testnet-staging (default: mainnet)
  *   NODE_URL              Override Thor node URL
  *   BATCH_SIZE            Votes/claims per batch (default: 50)
  *   DRY_RUN               1/true to simulate only
@@ -63,7 +63,7 @@ function log(msg: string) {
 }
 
 async function main() {
-  const network = process.env.RELAYER_NETWORK || "testnet-staging"
+  const network = process.env.RELAYER_NETWORK || "mainnet"
   const config = getNetworkConfig(network, process.env.NODE_URL?.trim())
   const { walletAddress, privateKey } = getWallet()
   const batchSize = Math.max(1, parseInt(process.env.BATCH_SIZE || "50", 10) || 50)

@@ -43,8 +43,8 @@
 ```bash
 MNEMONIC="your twelve word mnemonic phrase here" npx @vebetterdao/relayer-node
 
-# Mainnet
-RELAYER_NETWORK=mainnet MNEMONIC="..." npx @vebetterdao/relayer-node
+# Testnet
+RELAYER_NETWORK=testnet-staging MNEMONIC="..." npx @vebetterdao/relayer-node
 ```
 
 That's it. No clone, no build.
@@ -118,7 +118,7 @@ Each cycle the relayer node:
 |---|---|---|---|
 | `MNEMONIC` | One of these | — | BIP39 mnemonic phrase |
 | `RELAYER_PRIVATE_KEY` | two required | — | Hex private key (with or without `0x`) |
-| `RELAYER_NETWORK` | No | `testnet-staging` | `mainnet` or `testnet-staging` |
+| `RELAYER_NETWORK` | No | `mainnet` | `mainnet` or `testnet-staging` |
 | `NODE_URL` | No | Per network | Override Thor node URL |
 | `BATCH_SIZE` | No | `50` | Users per transaction batch |
 | `DRY_RUN` | No | `0` | `1` to simulate without sending transactions |
