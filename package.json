@@ -1,0 +1,28 @@
+{
+  "name": "@vebetterdao/relayer-node",
+  "version": "1.0.0",
+  "description": "Standalone relayer node for VeBetterDAO auto-voting and reward claiming",
+  "main": "dist/index.js",
+  "bin": {
+    "vbd-relayer": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vechain/sdk-core": "2.0.7",
+    "@vechain/sdk-network": "2.0.7",
+    "@vechain/vebetterdao-contracts": "^8.0.0",
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  }
+}
