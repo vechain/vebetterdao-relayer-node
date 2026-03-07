@@ -33,15 +33,24 @@
 
 <p align="center">
   <a href="https://docs.vebetterdao.org"><img src="https://img.shields.io/badge/docs-vebetterdao.org-blue?style=flat-square" alt="Docs"></a>
-  <a href="https://github.com/vechain/vebetterdao-contracts"><img src="https://img.shields.io/badge/contracts-v8.0-green?style=flat-square" alt="Contracts"></a>
-  <a href="https://hub.docker.com"><img src="https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"></a>
-  <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?style=flat-square&logo=node.js&logoColor=white" alt="Node">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square" alt="License">
 </p>
 
 ---
 
-## Quick Start
+## Quick Start (Docker)
+
+```bash
+docker build -t vbd-relayer .
+
+# Testnet (default)
+docker run --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
+
+# Mainnet
+docker run --env MNEMONIC="..." --env RELAYER_NETWORK=mainnet vbd-relayer
+```
+
+## Quick Start (npm)
 
 ```bash
 git clone https://github.com/vechain/vebetterdao-relayer-node.git
@@ -49,7 +58,6 @@ cd vebetterdao-relayer-node
 npm install
 npm run build
 
-# Testnet (default)
 MNEMONIC="your twelve word mnemonic phrase here" npm start
 
 # Mainnet
@@ -57,17 +65,6 @@ RELAYER_NETWORK=mainnet MNEMONIC="..." npm start
 
 # Or with private key
 RELAYER_PRIVATE_KEY=0xabc123... npm start
-```
-
-## Docker
-
-```bash
-docker build -t vbd-relayer .
-
-docker run --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
-
-# Mainnet
-docker run --env MNEMONIC="..." --env RELAYER_NETWORK=mainnet vbd-relayer
 ```
 
 ## Terminal Dashboard
