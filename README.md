@@ -38,35 +38,31 @@
 
 ---
 
-## Quick Start (Docker)
+## Quick Start
+
+```bash
+MNEMONIC="your twelve word mnemonic phrase here" npx @vebetterdao/relayer-node
+
+# Mainnet
+RELAYER_NETWORK=mainnet MNEMONIC="..." npx @vebetterdao/relayer-node
+```
+
+That's it. No clone, no build.
+
+### Alternative: global install
+
+```bash
+npm install -g @vebetterdao/relayer-node
+MNEMONIC="..." vbd-relayer
+```
+
+### Alternative: Docker
 
 ```bash
 git clone https://github.com/vechain/vebetterdao-relayer-node.git
 cd vebetterdao-relayer-node
 docker build -t vbd-relayer .
-
-# Testnet (default)
 docker run --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
-
-# Mainnet
-docker run --env MNEMONIC="..." --env RELAYER_NETWORK=mainnet vbd-relayer
-```
-
-## Quick Start (npm)
-
-```bash
-git clone https://github.com/vechain/vebetterdao-relayer-node.git
-cd vebetterdao-relayer-node
-npm install
-npm run build
-
-MNEMONIC="your twelve word mnemonic phrase here" npm start
-
-# Mainnet
-RELAYER_NETWORK=mainnet MNEMONIC="..." npm start
-
-# Or with private key
-RELAYER_PRIVATE_KEY=0xabc123... npm start
 ```
 
 ## Terminal Dashboard
