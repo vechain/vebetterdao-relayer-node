@@ -87,44 +87,59 @@ async function main() {
   process.on("SIGINT", shutdown)
   process.on("SIGTERM", shutdown)
 
+  const CYCLE_RETRIES = 3
+  const CYCLE_RETRY_MS = 3000
+
   while (running) {
-    try {
-      // Fetch and display summary
-      const summary = await fetchSummary(thor, config, walletAddress)
-      console.clear()
-      console.log(renderSummary(summary))
-      console.log("")
-      console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
+    let lastErr: unknown
+    for (let attempt = 1; attempt <= CYCLE_RETRIES; attempt++) {
+      try {
+        // Fetch and display summary
+        const summary = await fetchSummary(thor, config, walletAddress)
+        console.clear()
+        console.log(renderSummary(summary))
+        console.log("")
+        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
 
-      // Replay recent log entries after clear
-      for (const entry of activityLog.slice(-30)) {
-        console.log(entry)
+        // Replay recent log entries after clear
+        for (const entry of activityLog.slice(-30)) {
+          console.log(entry)
+        }
+
+        // Run cycles
+        if (summary.isRoundActive) {
+          log("Starting cast-vote cycle...")
+          const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+          renderCycleResult(voteResult).forEach(log)
+        } else {
+          log("Round not active, skipping cast-vote")
+        }
+
+        log("Starting claim cycle...")
+        const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+        renderCycleResult(claimResult).forEach(log)
+
+        // Re-fetch and display updated summary
+        const updated = await fetchSummary(thor, config, walletAddress)
+        console.clear()
+        console.log(renderSummary(updated))
+        console.log("")
+        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
+        for (const entry of activityLog.slice(-30)) {
+          console.log(entry)
+        }
+        lastErr = undefined
+        break
+      } catch (err) {
+        lastErr = err
+        if (attempt < CYCLE_RETRIES) {
+          log(chalk.yellow(`Cycle attempt ${attempt}/${CYCLE_RETRIES} failed, retrying in ${CYCLE_RETRY_MS / 1000}s...`))
+          await new Promise((r) => setTimeout(r, CYCLE_RETRY_MS))
+        }
       }
-
-      // Run cycles
-      if (summary.isRoundActive) {
-        log("Starting cast-vote cycle...")
-        const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-        renderCycleResult(voteResult).forEach(log)
-      } else {
-        log("Round not active, skipping cast-vote")
-      }
-
-      log("Starting claim cycle...")
-      const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-      renderCycleResult(claimResult).forEach(log)
-
-      // Re-fetch and display updated summary
-      const updated = await fetchSummary(thor, config, walletAddress)
-      console.clear()
-      console.log(renderSummary(updated))
-      console.log("")
-      console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
-      for (const entry of activityLog.slice(-30)) {
-        console.log(entry)
-      }
-    } catch (err) {
-      log(chalk.red(`Cycle error: ${err instanceof Error ? err.message : String(err)}`))
+    }
+    if (lastErr !== undefined) {
+      log(chalk.red(`Cycle error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`))
     }
 
     if (runOnce) {

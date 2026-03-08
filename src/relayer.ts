@@ -8,8 +8,10 @@ import { NetworkConfig, CycleResult, LogFn } from "./types"
 import {
   getCurrentRoundId,
   getRoundSnapshot,
+  getRoundDeadline,
   getAutoVotingUsers,
   getAlreadySkippedVotersForRound,
+  getAlreadyClaimedForRound,
   hasVoted,
 } from "./contracts"
 
@@ -193,22 +195,7 @@ export async function runCastVoteCycle(
     return { phase: "vote", roundId, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
-  // Filter out users who already voted (batched to avoid overwhelming the node)
-  log("Checking who already voted...")
-  let needsVote: string[] = []
-  let alreadyVoted = 0
-  const CHECK_BATCH = 50
-  for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
-    const chunk = allUsers.slice(i, i + CHECK_BATCH)
-    const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
-    for (let j = 0; j < chunk.length; j++) {
-      if (checks[j]) alreadyVoted++
-      else needsVote.push(chunk[j])
-    }
-  }
-  log(`${needsVote.length} users need voting (${alreadyVoted} already voted)`)
-
-  // Exclude users who already emitted AutoVoteSkipped this round (ineligible, e.g. balance < 1 VOT3)
+  // Fetch ineligible users (AutoVoteSkipped) for this round
   const best = await thor.blocks.getBestBlockCompressed()
   const latestBlock = best?.number ?? snapshot
   const skippedSet = await getAlreadySkippedVotersForRound(
@@ -218,18 +205,35 @@ export async function runCastVoteCycle(
     snapshot,
     latestBlock,
   )
-  if (skippedSet.size > 0) {
-    const before = needsVote.length
-    needsVote = needsVote.filter((u) => !skippedSet.has(u.toLowerCase()))
-    log(`${needsVote.length} users need voting (${before - needsVote.length} already skipped this round)`)
-  }
 
-  if (needsVote.length === 0) {
+  // Check who already voted (batched to avoid overwhelming the node)
+  log("Checking vote status...")
+  const unprocessed: string[] = []
+  let voted = 0
+  let ineligible = 0
+  const CHECK_BATCH = 50
+  for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
+    const chunk = allUsers.slice(i, i + CHECK_BATCH)
+    const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
+    for (let j = 0; j < chunk.length; j++) {
+      if (checks[j]) {
+        voted++
+      } else if (skippedSet.has(chunk[j].toLowerCase())) {
+        ineligible++
+      } else {
+        unprocessed.push(chunk[j])
+      }
+    }
+    if (i + CHECK_BATCH < allUsers.length) await delay(150)
+  }
+  log(`${allUsers.length} auto-voting users: ${voted} voted, ${ineligible} ineligible, ${unprocessed.length} pending`)
+
+  if (unprocessed.length === 0) {
     return { phase: "vote", roundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   const clauseBuilder = (user: string) => buildCastVoteClause(config.xAllocationVotingAddress, roundId, user)
-  const result = await processBatch(thor, needsVote, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
+  const result = await processBatch(thor, unprocessed, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
 
   return {
     phase: "vote",
@@ -260,17 +264,53 @@ export async function runClaimRewardCycle(
   }
 
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, previousRoundId)
+  const deadline = await getRoundDeadline(thor, config.xAllocationVotingAddress, previousRoundId)
 
   log(`Fetching auto-voting users for previous round #${previousRoundId}...`)
   const allUsers = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, snapshot)
-  log(`Found ${allUsers.length} users to claim for`)
 
   if (allUsers.length === 0) {
     return { phase: "claim", roundId: previousRoundId, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
+  // Only claim for users who voted AND haven't been claimed yet
+  const best = await thor.blocks.getBestBlockCompressed()
+  const latestBlock = best?.number ?? deadline
+  const claimedSet = await getAlreadyClaimedForRound(
+    thor,
+    config.voterRewardsAddress,
+    previousRoundId,
+    deadline,
+    latestBlock,
+  )
+
+  log("Checking vote status for previous round...")
+  const unclaimed: string[] = []
+  let didNotVote = 0
+  let alreadyClaimed = 0
+  const CHECK_BATCH = 50
+  for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
+    const chunk = allUsers.slice(i, i + CHECK_BATCH)
+    const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, u)))
+    for (let j = 0; j < chunk.length; j++) {
+      if (!checks[j]) {
+        didNotVote++
+      } else if (claimedSet.has(chunk[j].toLowerCase())) {
+        alreadyClaimed++
+      } else {
+        unclaimed.push(chunk[j])
+      }
+    }
+    if (i + CHECK_BATCH < allUsers.length) await delay(150)
+  }
+  log(`${allUsers.length} auto-voting users: ${alreadyClaimed} claimed, ${didNotVote} did not vote, ${unclaimed.length} pending`)
+
+  if (unclaimed.length === 0) {
+    return { phase: "claim", roundId: previousRoundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
+  }
+
   const clauseBuilder = (user: string) => buildClaimRewardClause(config.voterRewardsAddress, previousRoundId, user)
-  const result = await processBatch(thor, allUsers, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
+  const result = await processBatch(thor, unclaimed, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
 
   return {
     phase: "claim",

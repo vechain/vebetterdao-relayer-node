@@ -1,3 +1,5 @@
+import * as fs from "fs"
+import * as path from "path"
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
 import {
@@ -151,36 +153,89 @@ export async function getRelayerWeightedActions(thor: ThorClient, addr: string, 
 // ── Event fetching: auto-voting users ───────────────────────
 
 const MAX_EVENTS = 1000
+const CACHE_FILE = path.join(process.cwd(), ".auto-voting-cache.json")
+
+interface AutoVotingCacheData {
+  lastBlock: number
+  users: Record<string, boolean>
+}
+
+const autoVotingCache = {
+  userState: new Map<string, boolean>(),
+  lastBlock: -1,
+  loaded: false,
+}
+
+function loadCacheFromDisk(): void {
+  if (autoVotingCache.loaded) return
+  autoVotingCache.loaded = true
+  try {
+    const raw = fs.readFileSync(CACHE_FILE, "utf-8")
+    const data: AutoVotingCacheData = JSON.parse(raw)
+    if (typeof data.lastBlock === "number" && data.users) {
+      for (const [addr, enabled] of Object.entries(data.users)) {
+        autoVotingCache.userState.set(addr, enabled)
+      }
+      autoVotingCache.lastBlock = data.lastBlock
+    }
+  } catch {
+    // No cache file or corrupted — start fresh
+  }
+}
+
+function saveCacheToDisk(): void {
+  const data: AutoVotingCacheData = {
+    lastBlock: autoVotingCache.lastBlock,
+    users: Object.fromEntries(autoVotingCache.userState),
+  }
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(data), "utf-8")
+  } catch {
+    // Non-critical — next run will just re-fetch the delta
+  }
+}
 
 export async function getAutoVotingUsers(
   thor: ThorClient,
   contractAddress: string,
   toBlock: number,
 ): Promise<string[]> {
+  loadCacheFromDisk()
+
   const event = xavAbi.getEvent("AutoVotingToggled") as any
   const topics = event.encodeFilterTopicsNoNull({})
-  const userState = new Map<string, boolean>()
-  let offset = 0
 
-  while (true) {
-    const logs = await thor.logs.filterEventLogs({
-      range: { unit: "block" as const, from: 0, to: toBlock },
-      options: { offset, limit: MAX_EVENTS },
-      order: "asc",
-      criteriaSet: [{ criteria: { address: contractAddress, topic0: topics[0] }, eventAbi: event }],
-    })
-    for (const log of logs) {
-      const decoded = event.decodeEventLog({
-        topics: log.topics.map((t: string) => Hex.of(t)),
-        data: Hex.of(log.data),
-      })
-      userState.set(decoded.args.account as string, decoded.args.enabled as boolean)
-    }
-    if (logs.length < MAX_EVENTS) break
-    offset += MAX_EVENTS
+  if (toBlock < autoVotingCache.lastBlock) {
+    autoVotingCache.userState.clear()
+    autoVotingCache.lastBlock = -1
   }
 
-  return [...userState.entries()].filter(([, on]) => on).map(([a]) => a)
+  const fromBlock = autoVotingCache.lastBlock >= 0 ? autoVotingCache.lastBlock + 1 : 0
+
+  if (fromBlock <= toBlock) {
+    let offset = 0
+    while (true) {
+      const logs = await thor.logs.filterEventLogs({
+        range: { unit: "block" as const, from: fromBlock, to: toBlock },
+        options: { offset, limit: MAX_EVENTS },
+        order: "asc",
+        criteriaSet: [{ criteria: { address: contractAddress, topic0: topics[0] }, eventAbi: event }],
+      })
+      for (const log of logs) {
+        const decoded = event.decodeEventLog({
+          topics: log.topics.map((t: string) => Hex.of(t)),
+          data: Hex.of(log.data),
+        })
+        autoVotingCache.userState.set(decoded.args.account as string, decoded.args.enabled as boolean)
+      }
+      if (logs.length < MAX_EVENTS) break
+      offset += MAX_EVENTS
+    }
+    autoVotingCache.lastBlock = toBlock
+    saveCacheToDisk()
+  }
+
+  return [...autoVotingCache.userState.entries()].filter(([, on]) => on).map(([a]) => a)
 }
 
 /**
@@ -220,6 +275,45 @@ export async function getAlreadySkippedVotersForRound(
   }
 
   return skipped
+}
+
+/**
+ * Returns the set of voter addresses that already had RewardClaimedV2 emitted for the given round.
+ * Used so the relayer does not retry claimReward for already-claimed users.
+ */
+export async function getAlreadyClaimedForRound(
+  thor: ThorClient,
+  contractAddress: string,
+  roundId: number,
+  fromBlock: number,
+  toBlock: number,
+): Promise<Set<string>> {
+  const event = vrAbi.getEvent("RewardClaimedV2") as any
+  const topics = event.encodeFilterTopicsNoNull({})
+  const claimed = new Set<string>()
+  let offset = 0
+
+  while (true) {
+    const logs = await thor.logs.filterEventLogs({
+      range: { unit: "block" as const, from: fromBlock, to: toBlock },
+      options: { offset, limit: MAX_EVENTS },
+      order: "asc",
+      criteriaSet: [{ criteria: { address: contractAddress, topic0: topics[0] }, eventAbi: event }],
+    })
+    for (const log of logs) {
+      const decoded = event.decodeEventLog({
+        topics: log.topics.map((t: string) => Hex.of(t)),
+        data: Hex.of(log.data),
+      })
+      if (Number(decoded.args.cycle) === roundId) {
+        claimed.add((decoded.args.voter as string).toLowerCase())
+      }
+    }
+    if (logs.length < MAX_EVENTS) break
+    offset += MAX_EVENTS
+  }
+
+  return claimed
 }
 
 // ── Full summary fetch ──────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "name": "@vechain/vebetterdao-relayer-node",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Standalone relayer node for VeBetterDAO auto-voting and reward claiming",
   "main": "dist/index.js",
   "license": "MIT",
