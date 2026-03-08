@@ -1,5 +1,5 @@
 {
-  "name": "@vebetterdao/relayer-node",
+  "name": "@vechain/vebetterdao-relayer-node",
   "version": "0.0.1",
   "description": "Standalone relayer node for VeBetterDAO auto-voting and reward claiming",
   "main": "dist/index.js",
