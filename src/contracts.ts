@@ -1,5 +1,3 @@
-import * as fs from "fs"
-import * as path from "path"
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
 import {
@@ -153,7 +151,12 @@ export async function getRelayerWeightedActions(thor: ThorClient, addr: string, 
 // ── Event fetching: auto-voting users ───────────────────────
 
 const MAX_EVENTS = 1000
-const CACHE_FILE = path.join(process.cwd(), ".auto-voting-cache.json")
+
+function getCachePath(): string {
+  // Lazy require to keep this module browser-bundleable
+  const p = require("path") as typeof import("path")
+  return p.join(process.cwd(), ".auto-voting-cache.json")
+}
 
 interface AutoVotingCacheData {
   lastBlock: number
@@ -170,7 +173,8 @@ function loadCacheFromDisk(): void {
   if (autoVotingCache.loaded) return
   autoVotingCache.loaded = true
   try {
-    const raw = fs.readFileSync(CACHE_FILE, "utf-8")
+    const fs = require("fs") as typeof import("fs")
+    const raw = fs.readFileSync(getCachePath(), "utf-8")
     const data: AutoVotingCacheData = JSON.parse(raw)
     if (typeof data.lastBlock === "number" && data.users) {
       for (const [addr, enabled] of Object.entries(data.users)) {
@@ -189,7 +193,8 @@ function saveCacheToDisk(): void {
     users: Object.fromEntries(autoVotingCache.userState),
   }
   try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(data), "utf-8")
+    const fs = require("fs") as typeof import("fs")
+    fs.writeFileSync(getCachePath(), JSON.stringify(data), "utf-8")
   } catch {
     // Non-critical — next run will just re-fetch the delta
   }
