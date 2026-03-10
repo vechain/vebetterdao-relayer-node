@@ -11,12 +11,25 @@ const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
 const rrpAbi = ABIContract.ofAbi(RelayerRewardsPool__factory.abi)
 const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 
+const CALL_RETRIES = 3
+const CALL_RETRY_MS = 500
+
 async function call(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
-  const res = await thor.contracts.executeCall(address, abi.getFunction(method), args)
-  if (!res.success) {
-    throw new Error(`Call ${method} reverted: ${res.result?.errorMessage || "unknown"}`)
+  for (let attempt = 1; attempt <= CALL_RETRIES; attempt++) {
+    try {
+      const res = await thor.contracts.executeCall(address, abi.getFunction(method), args)
+      if (!res.success) {
+        throw new Error(`Call ${method} reverted: ${res.result?.errorMessage || "unknown"}`)
+      }
+      return res.result?.array ?? []
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const isRevert = msg.includes("reverted")
+      if (isRevert || attempt === CALL_RETRIES) throw err
+      await new Promise((r) => setTimeout(r, CALL_RETRY_MS * attempt))
+    }
   }
-  return res.result?.array ?? []
+  throw new Error("Unreachable")
 }
 
 // ── XAllocationVoting reads ─────────────────────────────────

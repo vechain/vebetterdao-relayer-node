@@ -211,7 +211,7 @@ export async function runCastVoteCycle(
   const unprocessed: string[] = []
   let voted = 0
   let ineligible = 0
-  const CHECK_BATCH = 50
+  const CHECK_BATCH = 10
   for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
@@ -288,7 +288,7 @@ export async function runClaimRewardCycle(
   const unclaimed: string[] = []
   let didNotVote = 0
   let alreadyClaimed = 0
-  const CHECK_BATCH = 50
+  const CHECK_BATCH = 10
   for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, u)))
