@@ -1,16 +1,18 @@
-name: Publish Docker image
+name: Build and publish Docker image
 
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  build-scan-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,6 +24,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -56,8 +59,8 @@ jobs:
         id: scan-ref
         run: |
           TAGS="${{ steps.meta.outputs.tags }}"
-          FIRST_TAG="${TAGS%%$'\n'*}"
-          echo "ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${FIRST_TAG}" >> $GITHUB_OUTPUT
+          FIRST_REF="${TAGS%%$'\n'*}"
+          echo "ref=${FIRST_REF}" >> $GITHUB_OUTPUT
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -68,7 +71,8 @@ jobs:
           format: table
 
       - name: Push image
+        if: github.event_name != 'pull_request'
         run: |
-          echo "${{ steps.meta.outputs.tags }}" | while read t; do
-            [ -n "$t" ] && docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$t"
+          echo "${{ steps.meta.outputs.tags }}" | while read ref; do
+            [ -n "$ref" ] && docker push "$ref"
           done
