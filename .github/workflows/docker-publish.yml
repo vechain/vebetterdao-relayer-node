@@ -40,12 +40,35 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
-      - name: Build and push
+      - name: Build image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Set image ref for Trivy
+        id: scan-ref
+        run: |
+          TAGS="${{ steps.meta.outputs.tags }}"
+          FIRST_TAG="${TAGS%%$'\n'*}"
+          echo "ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${FIRST_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.scan-ref.outputs.ref }}
+          severity: CRITICAL
+          exit-code: '1'
+          format: table
+
+      - name: Push image
+        run: |
+          echo "${{ steps.meta.outputs.tags }}" | while read t; do
+            [ -n "$t" ] && docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$t"
+          done
