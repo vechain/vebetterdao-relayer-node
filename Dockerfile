@@ -1,5 +1,5 @@
 FROM node:20-alpine AS builder
-RUN apk add --no-cache tini
+RUN apk upgrade --no-cache && apk add --no-cache tini
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -8,7 +8,8 @@ COPY src ./src
 RUN NODE_OPTIONS=--max-old-space-size=4096 npx tsc
 RUN npm prune --production
 
-FROM dhi.io/node:20-alpine3.23
+FROM node:20-alpine
+RUN apk upgrade --no-cache
 WORKDIR /app
 COPY --from=builder /sbin/tini /sbin/tini
 COPY --from=builder /app/dist ./dist
