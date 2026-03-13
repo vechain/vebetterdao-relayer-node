@@ -8,7 +8,7 @@ COPY src ./src
 RUN NODE_OPTIONS=--max-old-space-size=4096 npx tsc
 RUN npm prune --production
 
-FROM dhi.io/node:20-alpine3.23
+FROM node:20-alpine
 WORKDIR /app
 COPY --from=builder /sbin/tini /sbin/tini
 COPY --from=builder /app/dist ./dist

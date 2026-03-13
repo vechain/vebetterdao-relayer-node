@@ -13,6 +13,57 @@ const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 
 const CALL_RETRIES = 3
 const CALL_RETRY_MS = 500
+const STATUS_CHECK_BATCH = 50
+const STATUS_CHECK_DELAY_MS = 0
+const REPORT_CACHE_MS = 5 * 60 * 1000
+const DEFAULT_MAINNET_REPORT_URL = "https://relayers.vebetterdao.org/data/report.json"
+
+interface ReportRoundAnalytics {
+  roundId: number
+  autoVotingUsersCount: number
+  votedForCount: number
+  rewardsClaimedCount: number
+  totalRelayerRewardsRaw: string
+  estimatedRelayerRewardsRaw: string
+  reducedUsersCount: number
+}
+
+interface ReportRelayerRoundBreakdown {
+  roundId: number
+  votedForCount: number
+  rewardsClaimedCount: number
+  weightedActions: number
+  actions: number
+  claimableRewardsRaw: string
+  relayerRewardsClaimedRaw: string
+  vthoSpentOnVotingRaw: string
+  vthoSpentOnClaimingRaw: string
+}
+
+interface ReportRelayerAnalytics {
+  address: string
+  rounds: ReportRelayerRoundBreakdown[]
+}
+
+interface ReportData {
+  generatedAt: string
+  network: string
+  currentRound: number
+  rounds: ReportRoundAnalytics[]
+  relayers: ReportRelayerAnalytics[]
+}
+
+const reportCache: {
+  fetchedAt: number
+  source: string | null
+  data: ReportData | null
+} = {
+  fetchedAt: 0,
+  source: null,
+  data: null,
+}
+
+const blockTimestampCache = new Map<string, number | null>()
 
 async function call(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
   for (let attempt = 1; attempt <= CALL_RETRIES; attempt++) {
@@ -74,6 +125,114 @@ export async function hasVoted(thor: ThorClient, addr: string, roundId: number, 
   return Boolean(r[0])
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function splitActions(totalActions: bigint, weightedActions: bigint): { votes: number; claims: number } {
+  if (totalActions <= 0n || weightedActions <= 0n) return { votes: 0, claims: 0 }
+  const votes = weightedActions >= totalActions ? (weightedActions - totalActions) / 2n : 0n
+  const claims = totalActions >= votes ? totalActions - votes : 0n
+  return {
+    votes: Number(votes),
+    claims: Number(claims),
+  }
+}
+
+function getReportSource(config: NetworkConfig): string | null {
+  const explicitPath = process.env.RELAYER_REPORT_PATH?.trim()
+  if (explicitPath) return explicitPath
+
+  const explicitUrl = process.env.RELAYER_REPORT_URL?.trim()
+  if (explicitUrl) return explicitUrl
+
+  if (config.name === "mainnet") return DEFAULT_MAINNET_REPORT_URL
+  return null
+}
+
+async function fetchReport(config: NetworkConfig): Promise<ReportData | null> {
+  const source = getReportSource(config)
+  if (!source) return null
+
+  if (
+    reportCache.source === source
+    && reportCache.fetchedAt > 0
+    && Date.now() - reportCache.fetchedAt < REPORT_CACHE_MS
+  ) {
+    return reportCache.data
+  }
+
+  try {
+    let data: ReportData
+
+    if (/^https?:\/\//i.test(source)) {
+      const res = await fetch(source, { cache: "no-store" })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      data = await res.json() as ReportData
+    } else {
+      const fs = require("fs") as typeof import("fs")
+      data = JSON.parse(fs.readFileSync(source, "utf-8")) as ReportData
+    }
+
+    reportCache.source = source
+    reportCache.data = data
+    reportCache.fetchedAt = Date.now()
+    return data
+  } catch {
+    reportCache.source = source
+    reportCache.data = null
+    reportCache.fetchedAt = Date.now()
+    return null
+  }
+}
+
+async function getBlockTimestamp(nodeUrl: string, blockNumber: number): Promise<number | null> {
+  if (blockNumber <= 0) return null
+
+  const cacheKey = `${nodeUrl}:${blockNumber}`
+  if (blockTimestampCache.has(cacheKey)) {
+    return blockTimestampCache.get(cacheKey) ?? null
+  }
+
+  try {
+    const res = await fetch(`${nodeUrl.replace(/\/$/, "")}/blocks/${blockNumber}`, { cache: "no-store" })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json() as { timestamp?: number }
+    const timestamp = typeof data.timestamp === "number" ? data.timestamp : null
+    blockTimestampCache.set(cacheKey, timestamp)
+    return timestamp
+  } catch {
+    blockTimestampCache.set(cacheKey, null)
+    return null
+  }
+}
+
+export async function getVotedUsersForRound(
+  thor: ThorClient,
+  contractAddress: string,
+  roundId: number,
+  users: string[],
+): Promise<Set<string>> {
+  const voted = new Set<string>()
+
+  for (let i = 0; i < users.length; i += STATUS_CHECK_BATCH) {
+    const chunk = users.slice(i, i + STATUS_CHECK_BATCH)
+    const checks = await Promise.all(chunk.map((user) => hasVoted(thor, contractAddress, roundId, user)))
+
+    for (let j = 0; j < chunk.length; j++) {
+      if (checks[j]) {
+        voted.add(chunk[j].toLowerCase())
+      }
+    }
+
+    if (STATUS_CHECK_DELAY_MS > 0 && i + STATUS_CHECK_BATCH < users.length) {
+      await delay(STATUS_CHECK_DELAY_MS)
+    }
+  }
+
+  return voted
+}
+
 // ── RelayerRewardsPool reads ────────────────────────────────
 
 export async function getRegisteredRelayers(thor: ThorClient, addr: string): Promise<string[]> {
@@ -94,6 +253,11 @@ export async function getTotalRewards(thor: ThorClient, addr: string, roundId: n
 export async function getClaimableRewards(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
   const r = await call(thor, addr, rrpAbi, "claimableRewards", [relayer, roundId])
   return BigInt(r[0])
+}
+
+export async function getRelayerFee(thor: ThorClient, addr: string, roundId: number, user: string): Promise<bigint> {
+  const r = await call(thor, addr, vrAbi, "getRelayerFee", [roundId, user])
+  return BigInt(r[0] ?? 0)
 }
 
 export async function isRewardClaimable(thor: ThorClient, addr: string, roundId: number): Promise<boolean> {
@@ -159,6 +323,28 @@ export async function getRelayerActions(thor: ThorClient, addr: string, relayer:
 export async function getRelayerWeightedActions(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
   const r = await call(thor, addr, rrpAbi, "totalRelayerWeightedActions", [relayer, roundId])
   return BigInt(r[0])
+}
+
+async function estimateRewardPoolForRound(
+  thor: ThorClient,
+  voterRewardsAddress: string,
+  roundId: number,
+  votedUsers: Set<string>,
+): Promise<bigint> {
+  if (votedUsers.size === 0) return 0n
+
+  let totalEstimatedFees = 0n
+  const users = [...votedUsers]
+
+  for (let i = 0; i < users.length; i += STATUS_CHECK_BATCH) {
+    const chunk = users.slice(i, i + STATUS_CHECK_BATCH)
+    const fees = await Promise.all(chunk.map((user) => getRelayerFee(thor, voterRewardsAddress, roundId, user)))
+    for (const fee of fees) {
+      totalEstimatedFees += fee
+    }
+  }
+
+  return totalEstimatedFees
 }
 
 // ── Event fetching: auto-voting users ───────────────────────
@@ -354,7 +540,6 @@ export async function fetchSummary(
     roundSnapshot,
     roundDeadline,
     active,
-    autoVotingUsers,
     totalVoters,
     totalVotes,
     registeredRelayers,
@@ -370,9 +555,12 @@ export async function fetchSummary(
     currentTotalActions,
     currentCompletedWeighted,
     currentTotalWeighted,
-    currentMissedUsers,
     currentRelayerActions,
     currentRelayerWeighted,
+    previousRoundSnapshot,
+    previousRoundDeadline,
+    previousCompletedWeighted,
+    previousRelayerWeighted,
     previousTotalRewards,
     previousRelayerClaimable,
     previousRewardClaimable,
@@ -381,7 +569,6 @@ export async function fetchSummary(
     getRoundSnapshot(thor, xav, currentRoundId),
     getRoundDeadline(thor, xav, currentRoundId),
     isRoundActive(thor, xav, currentRoundId),
-    getTotalAutoVotingUsersAtRoundStart(thor, xav),
     getTotalVoters(thor, xav, currentRoundId),
     getTotalVotes(thor, xav, currentRoundId),
     getRegisteredRelayers(thor, rrp),
@@ -397,14 +584,117 @@ export async function fetchSummary(
     getTotalActions(thor, rrp, currentRoundId),
     getCompletedWeightedActions(thor, rrp, currentRoundId),
     getTotalWeightedActions(thor, rrp, currentRoundId),
-    getMissedAutoVotingUsersCount(thor, rrp, currentRoundId),
     getRelayerActions(thor, rrp, relayerAddress, currentRoundId),
     getRelayerWeightedActions(thor, rrp, relayerAddress, currentRoundId),
+    previousRoundId > 0 ? getRoundSnapshot(thor, xav, previousRoundId) : Promise.resolve(0),
+    previousRoundId > 0 ? getRoundDeadline(thor, xav, previousRoundId) : Promise.resolve(0),
+    previousRoundId > 0 ? getCompletedWeightedActions(thor, rrp, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getRelayerWeightedActions(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
     previousRoundId > 0 ? getTotalRewards(thor, rrp, previousRoundId) : Promise.resolve(0n),
     previousRoundId > 0 ? getClaimableRewards(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
     previousRoundId > 0 ? isRewardClaimable(thor, rrp, previousRoundId) : Promise.resolve(false),
     previousRoundId > 0 ? getRelayerActions(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
   ])
+
+  const [currentAutoVotingUsers, previousAutoVotingUsers] = await Promise.all([
+    getAutoVotingUsers(thor, xav, roundSnapshot),
+    previousRoundId > 0 ? getAutoVotingUsers(thor, xav, previousRoundSnapshot) : Promise.resolve([]),
+  ])
+
+  const [
+    currentSkippedUsers,
+    currentVotedUsers,
+    previousSkippedUsers,
+    previousVotedUsers,
+    previousClaimedUsers,
+    roundSnapshotTimestamp,
+    roundDeadlineTimestamp,
+    report,
+  ] = await Promise.all([
+    getAlreadySkippedVotersForRound(thor, xav, currentRoundId, roundSnapshot, latestBlock),
+    getVotedUsersForRound(thor, xav, currentRoundId, currentAutoVotingUsers),
+    previousRoundId > 0
+      ? getAlreadySkippedVotersForRound(thor, xav, previousRoundId, previousRoundSnapshot, previousRoundDeadline)
+      : Promise.resolve(new Set<string>()),
+    previousRoundId > 0
+      ? getVotedUsersForRound(thor, xav, previousRoundId, previousAutoVotingUsers)
+      : Promise.resolve(new Set<string>()),
+    previousRoundId > 0
+      ? getAlreadyClaimedForRound(thor, config.voterRewardsAddress, previousRoundId, previousRoundDeadline, latestBlock)
+      : Promise.resolve(new Set<string>()),
+    getBlockTimestamp(config.nodeUrl, roundSnapshot),
+    getBlockTimestamp(config.nodeUrl, roundDeadline),
+    fetchReport(config),
+  ])
+
+  const currentSkippedCount = currentAutoVotingUsers.reduce((count, user) => {
+    return count + (currentSkippedUsers.has(user.toLowerCase()) ? 1 : 0)
+  }, 0)
+  const previousSkippedCount = previousAutoVotingUsers.reduce((count, user) => {
+    return count + (previousSkippedUsers.has(user.toLowerCase()) ? 1 : 0)
+  }, 0)
+  const previousClaimedCount = [...previousVotedUsers].reduce((count, user) => {
+    return count + (previousClaimedUsers.has(user) ? 1 : 0)
+  }, 0)
+  const currentEstimatedPool = await estimateRewardPoolForRound(
+    thor,
+    config.voterRewardsAddress,
+    currentRoundId,
+    currentVotedUsers,
+  )
+  const currentEstimatedRewards = currentCompletedWeighted > 0n && currentRelayerWeighted > 0n
+    ? (currentEstimatedPool * currentRelayerWeighted) / currentCompletedWeighted
+    : 0n
+  const currentActionSplit = splitActions(currentRelayerActions, currentRelayerWeighted)
+  const previousActionSplit = splitActions(previousRelayerActions, previousRelayerWeighted)
+  const currentEarlyAccessEndBlock = roundSnapshot + Number(earlyAccessBlocks)
+  const currentEarlyAccessRemainingBlocks = Math.max(0, currentEarlyAccessEndBlock - latestBlock)
+
+  const reportRounds = report?.rounds ?? []
+  const reportRelayers = report?.relayers ?? []
+  const relayerReport = reportRelayers.find((entry) => entry.address.toLowerCase() === relayerAddress.toLowerCase()) ?? null
+  const previousRoundReport = reportRounds.find((entry) => entry.roundId === previousRoundId) ?? null
+  const currentRelayerRoundReport = relayerReport?.rounds.find((entry) => entry.roundId === currentRoundId) ?? null
+  const previousRelayerRoundReport = relayerReport?.rounds.find((entry) => entry.roundId === previousRoundId) ?? null
+
+  const totalWeightedByRound = new Map<number, number>()
+  if (report) {
+    for (const relayer of reportRelayers) {
+      for (const round of relayer.rounds) {
+        totalWeightedByRound.set(round.roundId, (totalWeightedByRound.get(round.roundId) ?? 0) + round.weightedActions)
+      }
+    }
+  }
+
+  let relayerLifetimeEarned = 0n
+  let relayerLifetimeSpent = 0n
+  let relayerAvailableToClaim = 0n
+  let relayerLifetimeVotes = 0
+  let relayerLifetimeClaims = 0
+
+  if (relayerReport) {
+    const roundById = new Map(reportRounds.map((round) => [round.roundId, round]))
+    for (const round of relayerReport.rounds) {
+      const roundMeta = roundById.get(round.roundId)
+      const totalWeighted = totalWeightedByRound.get(round.roundId) ?? 0
+      const totalRewardsRaw = roundMeta ? BigInt(roundMeta.totalRelayerRewardsRaw) : 0n
+      if (totalWeighted > 0 && round.weightedActions > 0) {
+        relayerLifetimeEarned += (totalRewardsRaw * BigInt(round.weightedActions)) / BigInt(totalWeighted)
+      } else {
+        relayerLifetimeEarned += BigInt(round.claimableRewardsRaw)
+      }
+      relayerLifetimeSpent += BigInt(round.vthoSpentOnVotingRaw) + BigInt(round.vthoSpentOnClaimingRaw)
+      relayerAvailableToClaim += BigInt(round.claimableRewardsRaw)
+      relayerLifetimeVotes += round.votedForCount
+      relayerLifetimeClaims += round.rewardsClaimedCount
+    }
+  }
+  const currentSpent = currentRelayerRoundReport
+    ? BigInt(currentRelayerRoundReport.vthoSpentOnVotingRaw) + BigInt(currentRelayerRoundReport.vthoSpentOnClaimingRaw)
+    : 0n
+  const previousSpent = previousRelayerRoundReport
+    ? BigInt(previousRelayerRoundReport.vthoSpentOnVotingRaw) + BigInt(previousRelayerRoundReport.vthoSpentOnClaimingRaw)
+    : 0n
 
   return {
     network: config.name,
@@ -412,12 +702,17 @@ export async function fetchSummary(
     relayerAddress,
     isRegistered: isReg,
     registeredRelayers,
+    reportGeneratedAt: report?.generatedAt ?? null,
     currentRoundId,
     roundSnapshot,
+    roundSnapshotTimestamp,
     roundDeadline,
+    roundDeadlineTimestamp,
     isRoundActive: active,
     latestBlock,
-    autoVotingUsers,
+    currentEarlyAccessEndBlock,
+    currentEarlyAccessRemainingBlocks,
+    autoVotingUsers: currentAutoVotingUsers.length,
     totalVoters,
     totalVotes,
     voteWeight,
@@ -426,18 +721,40 @@ export async function fetchSummary(
     feeDenominator,
     feeCap,
     earlyAccessBlocks,
+    currentEligibleVoters: Math.max(0, currentAutoVotingUsers.length - currentSkippedCount),
+    currentVotedCount: currentVotedUsers.size,
     currentTotalRewards,
+    currentEstimatedPool,
+    currentEstimatedRewards,
     currentRelayerClaimable,
     currentTotalActions,
     currentCompletedWeighted,
     currentTotalWeighted,
-    currentMissedUsers,
     currentRelayerActions,
     currentRelayerWeighted,
+    currentVotesPerformed: currentActionSplit.votes,
+    currentClaimsPerformed: currentActionSplit.claims,
+    currentSpent,
+    relayerLifetimeEarned,
+    relayerLifetimeSpent,
+    relayerAvailableToClaim,
+    relayerLifetimeVotes,
+    relayerLifetimeClaims,
     previousRoundId,
+    previousRoundDeadline,
+    previousEligibleVoters: Math.max(0, previousAutoVotingUsers.length - previousSkippedCount),
+    previousVotedCount: previousVotedUsers.size,
+    previousEligibleClaims: previousVotedUsers.size,
+    previousClaimedCount,
     previousTotalRewards,
     previousRelayerClaimable,
+    previousRelayerClaimed: previousRelayerRoundReport ? BigInt(previousRelayerRoundReport.relayerRewardsClaimedRaw) : 0n,
     previousRewardClaimable,
     previousRelayerActions,
+    previousRelayerWeighted,
+    previousCompletedWeighted,
+    previousVotesPerformed: previousActionSplit.votes,
+    previousClaimsPerformed: previousActionSplit.claims,
+    previousSpent,
   }
 }
