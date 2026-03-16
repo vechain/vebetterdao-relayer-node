@@ -72,6 +72,10 @@ npm run dev           # Run with ts-node (no build)
 - `POLL_INTERVAL_MS` — ms between cycles (default: 300000, min: 60000)
 - `RUN_ONCE` — `1` to exit after one cycle
 
+### Docker Secrets
+
+`MNEMONIC` and `RELAYER_PRIVATE_KEY` also support Docker Compose secrets as a fallback. The `envOrSecret()` helper in `index.ts` checks the env var first, then reads `/run/secrets/<name>`. Secret names: `mnemonic`, `relayer_private_key`.
+
 ## Contract Interactions
 
 ### Reads (view functions)
