@@ -337,14 +337,15 @@ export function renderSummary(s: RelayerSummary, version?: string): string {
     );
     out.push(
       "  " +
-        pad(
-          label("Pool rewards") +
-            " " +
-            chalk.green(formatB3TR(s.previousTotalRewards)),
-          label("Your rewards") +
-            " " +
-            chalk.greenBright.bold(previousRewardsLine),
-        ),
+        label("Pool rewards") +
+        " " +
+        chalk.green(formatB3TR(s.previousTotalRewards)),
+    );
+    out.push(
+      "  " +
+        label("Your rewards") +
+        " " +
+        chalk.greenBright.bold(previousRewardsLine),
     );
     out.push(
       "  " +
