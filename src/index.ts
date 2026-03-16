@@ -18,7 +18,7 @@ import { ThorClient } from "@vechain/sdk-network";
 import { Address, HDKey } from "@vechain/sdk-core";
 import chalk from "chalk";
 import { getNetworkConfig } from "./config";
-import { fetchSummary } from "./contracts";
+import { fetchSummary } from "./summary";
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer";
 import { CycleResult, RelayerSummary } from "./types";
 import { renderSummary, renderCycleResult, timestamp } from "./display";
