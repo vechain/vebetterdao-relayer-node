@@ -1,16 +1,11 @@
 services:
   relayer:
+    # image: ghcr.io/vechain/vebetterdao-relayer-node:latest # uncomment to pull the image from GitHub Container Registry
     build: .
-    # build: .  # uncomment to build locally instead of pulling the image
-    restart: unless-stopped
     secrets:
       - mnemonic
     environment:
       - RELAYER_NETWORK=mainnet
-      # - NODE_URL=https://custom-node.example.com
-      # - BATCH_SIZE=50
-      # - DRY_RUN=0
-      # - POLL_INTERVAL_MS=300000
 
 secrets:
   mnemonic:
