@@ -117,7 +117,7 @@ chmod 600 secrets/mnemonic.txt
 docker compose up -d
 ```
 
-The included [`docker-compose.yml`](docker-compose.yml) pulls the pre-built image and mounts `./secrets/mnemonic.txt`. To build locally instead, uncomment the `build: .` line.
+The included [`docker-compose.yml`](docker-compose.yml) builds the image locally with `build: .` and mounts `./secrets/mnemonic.txt`.
 
 To use a private key instead of a mnemonic, create `secrets/relayer_private_key.txt` containing your hex private key and update `docker-compose.yml`:
 
