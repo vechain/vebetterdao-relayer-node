@@ -86,7 +86,7 @@ MNEMONIC="..." vbd-relayer
 **Pre-built image** (after the repo has been pushed to `main` on GitHub, image is built at GHCR; use tag `latest` or `main`):
 
 ```bash
-docker run -it --env MNEMONIC="your twelve word mnemonic phrase here" ghcr.io/vechain/vebetterdao-relayer-node:latest
+docker run -it --name vbd-relayer --env MNEMONIC="your twelve word mnemonic phrase here" ghcr.io/vechain/vebetterdao-relayer-node:latest
 ```
 
 **Build locally** (works without publishing):
@@ -95,7 +95,7 @@ docker run -it --env MNEMONIC="your twelve word mnemonic phrase here" ghcr.io/ve
 git clone https://github.com/vechain/vebetterdao-relayer-node.git
 cd vebetterdao-relayer-node
 docker build -t vbd-relayer .
-docker run -it --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
+docker run -it --name vbd-relayer --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
 ```
 
 ### Alternative: Docker Compose with Secrets (recommended)

@@ -1,5 +1,6 @@
 services:
   relayer:
+    container_name: vbd-relayer
     # image: ghcr.io/vechain/vebetterdao-relayer-node:latest # uncomment to pull the image from GitHub Container Registry
     build: .
     secrets:
