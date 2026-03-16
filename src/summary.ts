@@ -1,6 +1,6 @@
 import { ThorClient } from "@vechain/sdk-network"
 import { NetworkConfig, RelayerSummary } from "./types"
-import { fetchReport } from "./report"
+import { fetchReport, type ReportCache } from "./report"
 import { getBlockTimestamp } from "./block-timestamps"
 import {
   getCurrentRoundId,
@@ -50,6 +50,7 @@ export async function fetchSummary(
   thor: ThorClient,
   config: NetworkConfig,
   relayerAddress: string,
+  reportCache?: ReportCache | null,
 ): Promise<RelayerSummary> {
   const xav = config.xAllocationVotingAddress
   const rrp = config.relayerRewardsPoolAddress
@@ -170,7 +171,7 @@ export async function fetchSummary(
       : Promise.resolve(new Set<string>()),
     getBlockTimestamp(config.nodeUrl, roundSnapshot),
     getBlockTimestamp(config.nodeUrl, roundDeadline),
-    fetchReport(config),
+    fetchReport(config, reportCache ?? undefined),
   ])
 
   const currentSkippedCount = currentAutoVotingUsers.reduce((count, user) => {

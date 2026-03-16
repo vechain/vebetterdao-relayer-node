@@ -1,6 +1,5 @@
 import { NetworkConfig } from "./types"
 
-const REPORT_CACHE_MS = 5 * 60 * 1000
 const DEFAULT_MAINNET_REPORT_URL = "https://relayers.vebetterdao.org/data/report.json"
 
 export interface ReportRoundAnalytics {
@@ -38,15 +37,14 @@ export interface ReportData {
   relayers: ReportRelayerAnalytics[]
 }
 
-const reportCache: {
+/** Caller-owned cache for fetchReport. Pass from the process that owns the lifecycle to avoid module-level state. */
+export interface ReportCache {
   fetchedAt: number
   source: string | null
   data: ReportData | null
-} = {
-  fetchedAt: 0,
-  source: null,
-  data: null,
 }
+
+export const REPORT_CACHE_MS = 5 * 60 * 1000
 
 function getReportSource(config: NetworkConfig): string | null {
   const explicitPath = process.env.RELAYER_REPORT_PATH?.trim()
@@ -59,16 +57,20 @@ function getReportSource(config: NetworkConfig): string | null {
   return null
 }
 
-export async function fetchReport(config: NetworkConfig): Promise<ReportData | null> {
+export async function fetchReport(
+  config: NetworkConfig,
+  cache?: ReportCache | null,
+): Promise<ReportData | null> {
   const source = getReportSource(config)
   if (!source) return null
 
   if (
-    reportCache.source === source &&
-    reportCache.fetchedAt > 0 &&
-    Date.now() - reportCache.fetchedAt < REPORT_CACHE_MS
+    cache &&
+    cache.source === source &&
+    cache.fetchedAt > 0 &&
+    Date.now() - cache.fetchedAt < REPORT_CACHE_MS
   ) {
-    return reportCache.data
+    return cache.data
   }
 
   try {
@@ -83,14 +85,18 @@ export async function fetchReport(config: NetworkConfig): Promise<ReportData | n
       data = JSON.parse(fs.readFileSync(source, "utf-8")) as ReportData
     }
 
-    reportCache.source = source
-    reportCache.data = data
-    reportCache.fetchedAt = Date.now()
+    if (cache) {
+      cache.source = source
+      cache.data = data
+      cache.fetchedAt = Date.now()
+    }
     return data
   } catch {
-    reportCache.source = source
-    reportCache.data = null
-    reportCache.fetchedAt = Date.now()
+    if (cache) {
+      cache.source = source
+      cache.data = null
+      cache.fetchedAt = Date.now()
+    }
     return null
   }
 }

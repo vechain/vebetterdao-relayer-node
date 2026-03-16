@@ -19,6 +19,7 @@ import { Address, HDKey } from "@vechain/sdk-core";
 import chalk from "chalk";
 import { getNetworkConfig } from "./config";
 import { fetchSummary } from "./summary";
+import type { ReportCache } from "./report";
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer";
 import { CycleResult, RelayerSummary } from "./types";
 import { renderSummary, renderCycleResult, timestamp } from "./display";
@@ -26,6 +27,8 @@ import { renderSummary, renderCycleResult, timestamp } from "./display";
 const { version: APP_VERSION = "unknown" } = require("../package.json") as {
   version?: string;
 };
+const reportCache: ReportCache = { fetchedAt: 0, source: null, data: null };
+
 const BLOCK_TIME_MS = 10_000;
 const MIN_POLL_MS = 60_000;
 const MAX_IDLE_POLL_MS = 60 * 60 * 1000;
@@ -231,7 +234,7 @@ async function main() {
         );
 
         // Fetch and display summary
-        const summary = await fetchSummary(thor, config, walletAddress);
+        const summary = await fetchSummary(thor, config, walletAddress, reportCache);
         printSummary(summary);
 
         // Run cycles
@@ -269,7 +272,7 @@ async function main() {
         renderCycleResult(claimResult).forEach(log);
 
         // Re-fetch and display updated summary
-        const updated = await fetchSummary(thor, config, walletAddress);
+        const updated = await fetchSummary(thor, config, walletAddress, reportCache);
         printSummary(updated);
         nextPoll = computeNextPollMs(updated, cycleResults, pollMs);
         lastErr = undefined;
