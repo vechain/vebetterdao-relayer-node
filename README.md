@@ -98,6 +98,42 @@ docker build -t vbd-relayer .
 docker run -it --env MNEMONIC="your twelve word mnemonic phrase here" vbd-relayer
 ```
 
+### Alternative: Docker Compose with Secrets (recommended)
+
+Using Docker Compose secrets keeps your mnemonic out of environment variables and shell history. The secret file is mounted read-only at `/run/secrets/mnemonic` inside the container.
+
+**1. Create the secret file:**
+
+```bash
+mkdir -p secrets
+chmod 700 secrets
+nano secrets/mnemonic.txt   # paste your mnemonic, save, exit
+chmod 600 secrets/mnemonic.txt
+```
+
+**2. Start the relayer:**
+
+```bash
+docker compose up -d
+```
+
+The included [`docker-compose.yml`](docker-compose.yml) builds the image locally with `build: .` and mounts `./secrets/mnemonic.txt`.
+
+To use a private key instead of a mnemonic, create `secrets/relayer_private_key.txt` containing your hex private key and update `docker-compose.yml`:
+
+```yaml
+services:
+  relayer:
+    secrets:
+      - relayer_private_key
+
+secrets:
+  relayer_private_key:
+    file: ./secrets/relayer_private_key.txt
+```
+
+> **Note:** Environment variables always take precedence over Docker secrets. If both `MNEMONIC` and the `mnemonic` secret are present, the env var wins.
+
 ## Becoming a Relayer
 
 Your wallet must be **registered on-chain** in the `RelayerRewardsPool` contract before you can earn fees. During the MVP phase, registration is managed by the pool admin. Check the [governance proposal](https://governance.vebetterdao.org/proposals/93450486232994296830196736391400835825360450263361422145364815974754963306849) and [community discussion](https://vechain.discourse.group/t/vebetterdao-proposal-auto-voting-for-x-allocation-with-gasless-voting-and-relayer-rewards/559) for the latest on the registration process.
@@ -175,6 +211,17 @@ Registered relayers get a head start. For the first ~5 days (43,200 blocks) afte
 | `DRY_RUN` | No | `0` | `1` to simulate without sending transactions |
 | `POLL_INTERVAL_MS` | No | `300000` | Milliseconds between cycles (min 60,000) |
 | `RUN_ONCE` | No | `0` | `1` to run a single cycle and exit |
+
+### Docker Secrets
+
+`MNEMONIC` and `RELAYER_PRIVATE_KEY` can also be provided as [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/). Place the value in a file and reference it in `docker-compose.yml`:
+
+| Secret name | Equivalent env var |
+|---|---|
+| `mnemonic` | `MNEMONIC` |
+| `relayer_private_key` | `RELAYER_PRIVATE_KEY` |
+
+Secrets are read from `/run/secrets/<name>` at startup. Environment variables take precedence over secrets when both are set.
 
 ## Contracts
 

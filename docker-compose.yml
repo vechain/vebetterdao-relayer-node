@@ -1,0 +1,12 @@
+services:
+  relayer:
+    # image: ghcr.io/vechain/vebetterdao-relayer-node:latest # uncomment to pull the image from GitHub Container Registry
+    build: .
+    secrets:
+      - mnemonic
+    environment:
+      - RELAYER_NETWORK=mainnet
+
+secrets:
+  mnemonic:
+    file: ./secrets/mnemonic.txt

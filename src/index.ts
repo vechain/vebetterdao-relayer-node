@@ -12,29 +12,58 @@
  *   DRY_RUN               1/true to simulate only
  *   POLL_INTERVAL_MS      Ms between cycles (default: 300000 = 5 min)
  *   RUN_ONCE              1/true to run one cycle and exit
+ *
+ * Docker secrets (mounted at /run/secrets/<name>) are used as fallbacks
+ * when the corresponding env var is not set.
  */
 
-import { ThorClient } from "@vechain/sdk-network";
-import { Address, HDKey } from "@vechain/sdk-core";
-import chalk from "chalk";
-import { getNetworkConfig } from "./config";
-import { fetchSummary } from "./summary";
-import type { ReportCache } from "./report";
-import { runCastVoteCycle, runClaimRewardCycle } from "./relayer";
-import { CycleResult, RelayerSummary } from "./types";
-import { renderSummary, renderCycleResult, timestamp } from "./display";
+import * as fs from "fs"
+import { ThorClient } from "@vechain/sdk-network"
+import { Address, HDKey } from "@vechain/sdk-core"
+import chalk from "chalk"
+import { getNetworkConfig } from "./config"
+import { fetchSummary } from "./summary"
+import type { ReportCache } from "./report"
+import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
+import { CycleResult, RelayerSummary } from "./types"
+import { renderSummary, renderCycleResult, timestamp } from "./display"
 
 const { version: APP_VERSION = "unknown" } = require("../package.json") as {
-  version?: string;
-};
-const reportCache: ReportCache = { fetchedAt: 0, source: null, data: null };
+  version?: string
+}
+const reportCache: ReportCache = { fetchedAt: 0, source: null, data: null }
 
-const BLOCK_TIME_MS = 10_000;
-const MIN_POLL_MS = 60_000;
-const MAX_IDLE_POLL_MS = 60 * 60 * 1000;
+const BLOCK_TIME_MS = 10_000
+const MIN_POLL_MS = 60_000
+const MAX_IDLE_POLL_MS = 60 * 60 * 1000
+
+const SECRETS_DIR = "/run/secrets"
+const ALLOWED_SECRETS = new Set(["mnemonic", "relayer_private_key"])
+
+/**
+ * Read a Docker secret file. Only allows names from ALLOWED_SECRETS to
+ * prevent path-traversal attacks. Returns the trimmed content, or undefined
+ * if the file doesn't exist or isn't readable.
+ */
+function readSecret(name: string): string | undefined {
+  if (!ALLOWED_SECRETS.has(name)) return undefined
+  const secretPath = `${SECRETS_DIR}/${name}`
+  try {
+    return fs.readFileSync(secretPath, "utf-8").trim()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Resolve a config value: env var first, then Docker secret fallback.
+ */
+function envOrSecret(envKey: string, secretName: string): string | undefined {
+  return process.env[envKey]?.trim() || readSecret(secretName)
+}
 
 function getWallet(): { walletAddress: string; privateKey: string } {
-  const pk = process.env.RELAYER_PRIVATE_KEY?.trim();
+  const pk = envOrSecret("RELAYER_PRIVATE_KEY", "relayer_private_key")
   if (pk) {
     const clean = pk.startsWith("0x") ? pk.slice(2) : pk;
     return {
@@ -42,10 +71,11 @@ function getWallet(): { walletAddress: string; privateKey: string } {
       privateKey: clean,
     };
   }
-  const words = process.env.MNEMONIC?.trim()?.split(/\s+/);
+  const mnemonic = envOrSecret("MNEMONIC", "mnemonic")
+  const words = mnemonic?.split(/\s+/)
   if (!words?.length) {
-    console.error(chalk.red("Set MNEMONIC or RELAYER_PRIVATE_KEY env"));
-    process.exit(1);
+    console.error(chalk.red("Set MNEMONIC or RELAYER_PRIVATE_KEY (env var or Docker secret)"))
+    process.exit(1)
   }
   const child = HDKey.fromMnemonic(words).deriveChild(0);
   const raw = child.privateKey;
