@@ -27,12 +27,15 @@ import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
 import { renderSummary, renderCycleResult, timestamp } from "./display"
 
 const SECRETS_DIR = "/run/secrets"
+const ALLOWED_SECRETS = new Set(["mnemonic", "relayer_private_key"])
 
 /**
- * Read a Docker secret file. Returns the trimmed content, or undefined if
- * the file doesn't exist or isn't readable.
+ * Read a Docker secret file. Only allows names from ALLOWED_SECRETS to
+ * prevent path-traversal attacks. Returns the trimmed content, or undefined
+ * if the file doesn't exist or isn't readable.
  */
 function readSecret(name: string): string | undefined {
+  if (!ALLOWED_SECRETS.has(name)) return undefined
   const secretPath = `${SECRETS_DIR}/${name}`
   try {
     return fs.readFileSync(secretPath, "utf-8").trim()
