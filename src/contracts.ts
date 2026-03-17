@@ -5,6 +5,7 @@ import {
   VoterRewards__factory,
   RelayerRewardsPool__factory,
 } from "@vechain/vebetterdao-contracts/typechain-types"
+import { NetworkConfig, RelayerSummary } from "./types"
 
 const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
 const rrpAbi = ABIContract.ofAbi(RelayerRewardsPool__factory.abi)
@@ -12,8 +13,6 @@ const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 
 const CALL_RETRIES = 3
 const CALL_RETRY_MS = 500
-const STATUS_CHECK_BATCH = 50
-const STATUS_CHECK_DELAY_MS = 0
 
 async function call(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
   for (let attempt = 1; attempt <= CALL_RETRIES; attempt++) {
@@ -75,36 +74,6 @@ export async function hasVoted(thor: ThorClient, addr: string, roundId: number, 
   return Boolean(r[0])
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export async function getVotedUsersForRound(
-  thor: ThorClient,
-  contractAddress: string,
-  roundId: number,
-  users: string[],
-): Promise<Set<string>> {
-  const voted = new Set<string>()
-
-  for (let i = 0; i < users.length; i += STATUS_CHECK_BATCH) {
-    const chunk = users.slice(i, i + STATUS_CHECK_BATCH)
-    const checks = await Promise.all(chunk.map((user) => hasVoted(thor, contractAddress, roundId, user)))
-
-    for (let j = 0; j < chunk.length; j++) {
-      if (checks[j]) {
-        voted.add(chunk[j].toLowerCase())
-      }
-    }
-
-    if (STATUS_CHECK_DELAY_MS > 0 && i + STATUS_CHECK_BATCH < users.length) {
-      await delay(STATUS_CHECK_DELAY_MS)
-    }
-  }
-
-  return voted
-}
-
 // ── RelayerRewardsPool reads ────────────────────────────────
 
 export async function getRegisteredRelayers(thor: ThorClient, addr: string): Promise<string[]> {
@@ -125,11 +94,6 @@ export async function getTotalRewards(thor: ThorClient, addr: string, roundId: n
 export async function getClaimableRewards(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
   const r = await call(thor, addr, rrpAbi, "claimableRewards", [relayer, roundId])
   return BigInt(r[0])
-}
-
-export async function getRelayerFee(thor: ThorClient, addr: string, roundId: number, user: string): Promise<bigint> {
-  const r = await call(thor, addr, vrAbi, "getRelayerFee", [roundId, user])
-  return BigInt(r[0] ?? 0)
 }
 
 export async function isRewardClaimable(thor: ThorClient, addr: string, roundId: number): Promise<boolean> {
@@ -195,28 +159,6 @@ export async function getRelayerActions(thor: ThorClient, addr: string, relayer:
 export async function getRelayerWeightedActions(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
   const r = await call(thor, addr, rrpAbi, "totalRelayerWeightedActions", [relayer, roundId])
   return BigInt(r[0])
-}
-
-export async function estimateRewardPoolForRound(
-  thor: ThorClient,
-  voterRewardsAddress: string,
-  roundId: number,
-  votedUsers: Set<string>,
-): Promise<bigint> {
-  if (votedUsers.size === 0) return 0n
-
-  let totalEstimatedFees = 0n
-  const users = [...votedUsers]
-
-  for (let i = 0; i < users.length; i += STATUS_CHECK_BATCH) {
-    const chunk = users.slice(i, i + STATUS_CHECK_BATCH)
-    const fees = await Promise.all(chunk.map((user) => getRelayerFee(thor, voterRewardsAddress, roundId, user)))
-    for (const fee of fees) {
-      totalEstimatedFees += fee
-    }
-  }
-
-  return totalEstimatedFees
 }
 
 // ── Event fetching: auto-voting users ───────────────────────
@@ -390,4 +332,112 @@ export async function getAlreadyClaimedForRound(
   }
 
   return claimed
+}
+
+// ── Full summary fetch ──────────────────────────────────────
+
+export async function fetchSummary(
+  thor: ThorClient,
+  config: NetworkConfig,
+  relayerAddress: string,
+): Promise<RelayerSummary> {
+  const xav = config.xAllocationVotingAddress
+  const rrp = config.relayerRewardsPoolAddress
+
+  const currentRoundId = await getCurrentRoundId(thor, xav)
+  const previousRoundId = currentRoundId > 1 ? currentRoundId - 1 : 0
+
+  const best = await thor.blocks.getBestBlockCompressed()
+  const latestBlock = best?.number ?? 0
+
+  const [
+    roundSnapshot,
+    roundDeadline,
+    active,
+    autoVotingUsers,
+    totalVoters,
+    totalVotes,
+    registeredRelayers,
+    isReg,
+    voteWeight,
+    claimWeight,
+    feePercentage,
+    feeDenominator,
+    feeCap,
+    earlyAccessBlocks,
+    currentTotalRewards,
+    currentRelayerClaimable,
+    currentTotalActions,
+    currentCompletedWeighted,
+    currentTotalWeighted,
+    currentMissedUsers,
+    currentRelayerActions,
+    currentRelayerWeighted,
+    previousTotalRewards,
+    previousRelayerClaimable,
+    previousRewardClaimable,
+    previousRelayerActions,
+  ] = await Promise.all([
+    getRoundSnapshot(thor, xav, currentRoundId),
+    getRoundDeadline(thor, xav, currentRoundId),
+    isRoundActive(thor, xav, currentRoundId),
+    getTotalAutoVotingUsersAtRoundStart(thor, xav),
+    getTotalVoters(thor, xav, currentRoundId),
+    getTotalVotes(thor, xav, currentRoundId),
+    getRegisteredRelayers(thor, rrp),
+    isRegisteredRelayer(thor, rrp, relayerAddress),
+    getVoteWeight(thor, rrp),
+    getClaimWeight(thor, rrp),
+    getRelayerFeePercentage(thor, rrp),
+    getRelayerFeeDenominator(thor, rrp),
+    getFeeCap(thor, rrp),
+    getEarlyAccessBlocks(thor, rrp),
+    getTotalRewards(thor, rrp, currentRoundId),
+    getClaimableRewards(thor, rrp, relayerAddress, currentRoundId),
+    getTotalActions(thor, rrp, currentRoundId),
+    getCompletedWeightedActions(thor, rrp, currentRoundId),
+    getTotalWeightedActions(thor, rrp, currentRoundId),
+    getMissedAutoVotingUsersCount(thor, rrp, currentRoundId),
+    getRelayerActions(thor, rrp, relayerAddress, currentRoundId),
+    getRelayerWeightedActions(thor, rrp, relayerAddress, currentRoundId),
+    previousRoundId > 0 ? getTotalRewards(thor, rrp, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getClaimableRewards(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? isRewardClaimable(thor, rrp, previousRoundId) : Promise.resolve(false),
+    previousRoundId > 0 ? getRelayerActions(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
+  ])
+
+  return {
+    network: config.name,
+    nodeUrl: config.nodeUrl,
+    relayerAddress,
+    isRegistered: isReg,
+    registeredRelayers,
+    currentRoundId,
+    roundSnapshot,
+    roundDeadline,
+    isRoundActive: active,
+    latestBlock,
+    autoVotingUsers,
+    totalVoters,
+    totalVotes,
+    voteWeight,
+    claimWeight,
+    feePercentage,
+    feeDenominator,
+    feeCap,
+    earlyAccessBlocks,
+    currentTotalRewards,
+    currentRelayerClaimable,
+    currentTotalActions,
+    currentCompletedWeighted,
+    currentTotalWeighted,
+    currentMissedUsers,
+    currentRelayerActions,
+    currentRelayerWeighted,
+    previousRoundId,
+    previousTotalRewards,
+    previousRelayerClaimable,
+    previousRewardClaimable,
+    previousRelayerActions,
+  }
 }

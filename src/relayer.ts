@@ -12,7 +12,7 @@ import {
   getAutoVotingUsers,
   getAlreadySkippedVotersForRound,
   getAlreadyClaimedForRound,
-  getVotedUsersForRound,
+  hasVoted,
 } from "./contracts"
 
 const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
@@ -192,18 +192,7 @@ export async function runCastVoteCycle(
   log(`Found ${allUsers.length} auto-voting users`)
 
   if (allUsers.length === 0) {
-    return {
-      phase: "vote",
-      roundId,
-      totalUsers: 0,
-      actionableUsers: 0,
-      pendingUsers: 0,
-      successful: 0,
-      failed: [],
-      transient: [],
-      txIds: [],
-      dryRun,
-    }
+    return { phase: "vote", roundId, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   // Fetch ineligible users (AutoVoteSkipped) for this round
@@ -220,47 +209,36 @@ export async function runCastVoteCycle(
   // Check who already voted (batched to avoid overwhelming the node)
   log("Checking vote status...")
   const unprocessed: string[] = []
-  const votedSet = await getVotedUsersForRound(thor, config.xAllocationVotingAddress, roundId, allUsers)
   let voted = 0
   let ineligible = 0
-
-  for (const user of allUsers) {
-    const normalizedUser = user.toLowerCase()
-    if (votedSet.has(normalizedUser)) {
-      voted++
-    } else if (skippedSet.has(normalizedUser)) {
-      ineligible++
-    } else {
-      unprocessed.push(user)
+  const CHECK_BATCH = 10
+  for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
+    const chunk = allUsers.slice(i, i + CHECK_BATCH)
+    const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
+    for (let j = 0; j < chunk.length; j++) {
+      if (checks[j]) {
+        voted++
+      } else if (skippedSet.has(chunk[j].toLowerCase())) {
+        ineligible++
+      } else {
+        unprocessed.push(chunk[j])
+      }
     }
+    if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
   log(`${allUsers.length} auto-voting users: ${voted} voted, ${ineligible} ineligible, ${unprocessed.length} pending`)
 
   if (unprocessed.length === 0) {
-    return {
-      phase: "vote",
-      roundId,
-      totalUsers: allUsers.length,
-      actionableUsers: 0,
-      pendingUsers: 0,
-      successful: 0,
-      failed: [],
-      transient: [],
-      txIds: [],
-      dryRun,
-    }
+    return { phase: "vote", roundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   const clauseBuilder = (user: string) => buildCastVoteClause(config.xAllocationVotingAddress, roundId, user)
   const result = await processBatch(thor, unprocessed, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
-  const pendingUsers = Math.max(0, unprocessed.length - result.successful - result.failed.length)
 
   return {
     phase: "vote",
     roundId,
     totalUsers: allUsers.length,
-    actionableUsers: unprocessed.length,
-    pendingUsers,
     successful: result.successful,
     failed: result.failed,
     transient: result.transient,
@@ -282,18 +260,7 @@ export async function runClaimRewardCycle(
   const previousRoundId = currentRoundId - 1
   if (previousRoundId <= 0) {
     log("No previous round to claim for")
-    return {
-      phase: "claim",
-      roundId: 0,
-      totalUsers: 0,
-      actionableUsers: 0,
-      pendingUsers: 0,
-      successful: 0,
-      failed: [],
-      transient: [],
-      txIds: [],
-      dryRun,
-    }
+    return { phase: "claim", roundId: 0, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, previousRoundId)
@@ -303,18 +270,7 @@ export async function runClaimRewardCycle(
   const allUsers = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, snapshot)
 
   if (allUsers.length === 0) {
-    return {
-      phase: "claim",
-      roundId: previousRoundId,
-      totalUsers: 0,
-      actionableUsers: 0,
-      pendingUsers: 0,
-      successful: 0,
-      failed: [],
-      transient: [],
-      txIds: [],
-      dryRun,
-    }
+    return { phase: "claim", roundId: previousRoundId, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   // Only claim for users who voted AND haven't been claimed yet
@@ -330,47 +286,36 @@ export async function runClaimRewardCycle(
 
   log("Checking vote status for previous round...")
   const unclaimed: string[] = []
-  const votedSet = await getVotedUsersForRound(thor, config.xAllocationVotingAddress, previousRoundId, allUsers)
   let didNotVote = 0
   let alreadyClaimed = 0
-
-  for (const user of allUsers) {
-    const normalizedUser = user.toLowerCase()
-    if (!votedSet.has(normalizedUser)) {
-      didNotVote++
-    } else if (claimedSet.has(normalizedUser)) {
-      alreadyClaimed++
-    } else {
-      unclaimed.push(user)
+  const CHECK_BATCH = 10
+  for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
+    const chunk = allUsers.slice(i, i + CHECK_BATCH)
+    const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, u)))
+    for (let j = 0; j < chunk.length; j++) {
+      if (!checks[j]) {
+        didNotVote++
+      } else if (claimedSet.has(chunk[j].toLowerCase())) {
+        alreadyClaimed++
+      } else {
+        unclaimed.push(chunk[j])
+      }
     }
+    if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
   log(`${allUsers.length} auto-voting users: ${alreadyClaimed} claimed, ${didNotVote} did not vote, ${unclaimed.length} pending`)
 
   if (unclaimed.length === 0) {
-    return {
-      phase: "claim",
-      roundId: previousRoundId,
-      totalUsers: allUsers.length,
-      actionableUsers: 0,
-      pendingUsers: 0,
-      successful: 0,
-      failed: [],
-      transient: [],
-      txIds: [],
-      dryRun,
-    }
+    return { phase: "claim", roundId: previousRoundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
   }
 
   const clauseBuilder = (user: string) => buildClaimRewardClause(config.voterRewardsAddress, previousRoundId, user)
   const result = await processBatch(thor, unclaimed, clauseBuilder, walletAddress, privateKey, batchSize, dryRun, log)
-  const pendingUsers = Math.max(0, unclaimed.length - result.successful - result.failed.length)
 
   return {
     phase: "claim",
     roundId: previousRoundId,
     totalUsers: allUsers.length,
-    actionableUsers: unclaimed.length,
-    pendingUsers,
     successful: result.successful,
     failed: result.failed,
     transient: result.transient,
