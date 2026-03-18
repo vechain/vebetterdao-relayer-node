@@ -43,10 +43,15 @@ export interface RelayerSummary {
 
   // Previous round
   previousRoundId: number
+  previousRoundDeadline: number
   previousTotalRewards: bigint
   previousRelayerClaimable: bigint
   previousRewardClaimable: boolean
   previousRelayerActions: bigint
+  previousRelayerWeighted: bigint
+  previousCompletedWeighted: bigint
+  previousTotalWeighted: bigint
+  previousMissedUsers: bigint
 }
 
 export interface CycleResult {

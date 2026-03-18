@@ -373,10 +373,15 @@ export async function fetchSummary(
     currentMissedUsers,
     currentRelayerActions,
     currentRelayerWeighted,
+    previousRoundDeadline,
     previousTotalRewards,
     previousRelayerClaimable,
     previousRewardClaimable,
     previousRelayerActions,
+    previousRelayerWeighted,
+    previousCompletedWeighted,
+    previousTotalWeighted,
+    previousMissedUsers,
   ] = await Promise.all([
     getRoundSnapshot(thor, xav, currentRoundId),
     getRoundDeadline(thor, xav, currentRoundId),
@@ -400,10 +405,15 @@ export async function fetchSummary(
     getMissedAutoVotingUsersCount(thor, rrp, currentRoundId),
     getRelayerActions(thor, rrp, relayerAddress, currentRoundId),
     getRelayerWeightedActions(thor, rrp, relayerAddress, currentRoundId),
+    previousRoundId > 0 ? getRoundDeadline(thor, xav, previousRoundId) : Promise.resolve(0),
     previousRoundId > 0 ? getTotalRewards(thor, rrp, previousRoundId) : Promise.resolve(0n),
     previousRoundId > 0 ? getClaimableRewards(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
     previousRoundId > 0 ? isRewardClaimable(thor, rrp, previousRoundId) : Promise.resolve(false),
     previousRoundId > 0 ? getRelayerActions(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getRelayerWeightedActions(thor, rrp, relayerAddress, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getCompletedWeightedActions(thor, rrp, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getTotalWeightedActions(thor, rrp, previousRoundId) : Promise.resolve(0n),
+    previousRoundId > 0 ? getMissedAutoVotingUsersCount(thor, rrp, previousRoundId) : Promise.resolve(0n),
   ])
 
   return {
@@ -435,9 +445,14 @@ export async function fetchSummary(
     currentRelayerActions,
     currentRelayerWeighted,
     previousRoundId,
+    previousRoundDeadline,
     previousTotalRewards,
     previousRelayerClaimable,
     previousRewardClaimable,
     previousRelayerActions,
+    previousRelayerWeighted,
+    previousCompletedWeighted,
+    previousTotalWeighted,
+    previousMissedUsers,
   }
 }

@@ -21,10 +21,10 @@ import * as fs from "fs"
 import { ThorClient } from "@vechain/sdk-network"
 import { Address, HDKey } from "@vechain/sdk-core"
 import chalk from "chalk"
-import { getNetworkConfig } from "./config"
+import { getNetworkConfig, getNodePool } from "./config"
 import { fetchSummary } from "./contracts"
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
-import { renderSummary, renderCycleResult, timestamp } from "./display"
+import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
 
 const SECRETS_DIR = "/run/secrets"
 const ALLOWED_SECRETS = new Set(["mnemonic", "relayer_private_key"])
@@ -92,16 +92,36 @@ function log(msg: string) {
   console.log(entry)
 }
 
+function logRaw(msg: string) {
+  activityLog.push(msg)
+  if (activityLog.length > MAX_LOG) activityLog.shift()
+  console.log(msg)
+}
+
 async function main() {
   const network = process.env.RELAYER_NETWORK || "mainnet"
-  const config = getNetworkConfig(network, process.env.NODE_URL?.trim())
+  const nodeUrlOverride = process.env.NODE_URL?.trim()
+  const config = getNetworkConfig(network, nodeUrlOverride)
   const { walletAddress, privateKey } = getWallet()
   const batchSize = Math.max(1, parseInt(process.env.BATCH_SIZE || "50", 10) || 50)
   const dryRun = envBool("DRY_RUN")
   const pollMs = Math.max(60_000, parseInt(process.env.POLL_INTERVAL_MS || "300000", 10) || 300_000)
   const runOnce = envBool("RUN_ONCE")
 
-  const thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+  // Node pool for automatic failover.
+  // If the user explicitly set NODE_URL, use only that node (no rotation).
+  const nodePool = nodeUrlOverride ? [nodeUrlOverride] : getNodePool(network)
+  let nodeIndex = 0
+  let thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+
+  function rotateNode() {
+    if (nodePool.length <= 1) return
+    nodeIndex = (nodeIndex + 1) % nodePool.length
+    config.nodeUrl = nodePool[nodeIndex]
+    thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+    const host = new URL(config.nodeUrl).hostname
+    log(chalk.yellow(`Rotating to node: ${host}`))
+  }
 
   let running = true
   let forceExit = false
@@ -117,53 +137,58 @@ async function main() {
   process.on("SIGINT", shutdown)
   process.on("SIGTERM", shutdown)
 
-  const CYCLE_RETRIES = 3
+  const CYCLE_RETRIES = nodePool.length
   const CYCLE_RETRY_MS = 3000
+
+  function refreshScreen(summary: Awaited<ReturnType<typeof fetchSummary>>) {
+    process.stdout.write("\x1B[2J\x1B[H")
+    console.log(renderSummary(summary))
+    console.log("")
+    console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
+    for (const entry of activityLog.slice(-30)) {
+      console.log(entry)
+    }
+  }
+
+  // Show summary immediately on startup
+  try {
+    const initial = await fetchSummary(thor, config, walletAddress)
+    refreshScreen(initial)
+  } catch {
+    log(chalk.yellow("Could not fetch initial summary, starting cycles..."))
+  }
 
   while (running) {
     let lastErr: unknown
     for (let attempt = 1; attempt <= CYCLE_RETRIES; attempt++) {
       try {
-        // Fetch and display summary
         const summary = await fetchSummary(thor, config, walletAddress)
-        console.clear()
-        console.log(renderSummary(summary))
-        console.log("")
-        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
-
-        // Replay recent log entries after clear
-        for (const entry of activityLog.slice(-30)) {
-          console.log(entry)
-        }
 
         // Run cycles
         if (summary.isRoundActive) {
-          log("Starting cast-vote cycle...")
+          logRaw(logSectionHeader("vote", summary.currentRoundId))
           const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
           renderCycleResult(voteResult).forEach(log)
         } else {
-          log("Round not active, skipping cast-vote")
+          log(chalk.dim("Round not active, skipping cast-vote"))
         }
 
-        log("Starting claim cycle...")
+        logRaw("")
+        logRaw(logSectionHeader("claim", summary.previousRoundId))
         const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
         renderCycleResult(claimResult).forEach(log)
 
-        // Re-fetch and display updated summary
+        // Render once after all work is done
         const updated = await fetchSummary(thor, config, walletAddress)
-        console.clear()
-        console.log(renderSummary(updated))
-        console.log("")
-        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
-        for (const entry of activityLog.slice(-30)) {
-          console.log(entry)
-        }
+        refreshScreen(updated)
+
         lastErr = undefined
         break
       } catch (err) {
         lastErr = err
         if (attempt < CYCLE_RETRIES) {
           log(chalk.yellow(`Cycle attempt ${attempt}/${CYCLE_RETRIES} failed, retrying in ${CYCLE_RETRY_MS / 1000}s...`))
+          rotateNode()
           await new Promise((r) => setTimeout(r, CYCLE_RETRY_MS))
         }
       }
@@ -177,7 +202,8 @@ async function main() {
       break
     }
 
-    log(`Next cycle in ${(pollMs / 60_000).toFixed(0)}m...`)
+    logRaw("")
+    log(chalk.dim(`Next cycle in ${(pollMs / 60_000).toFixed(0)}m...`))
     await new Promise((r) => setTimeout(r, pollMs))
   }
 }

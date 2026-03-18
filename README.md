@@ -142,41 +142,72 @@ You can run the node without registration to test, but votes cast during the **e
 
 ## Terminal Dashboard
 
-The node renders a live dashboard that refreshes each cycle:
+The node renders a live dashboard that refreshes each cycle. On startup it shows the summary immediately, then streams activity below.
 
 ```
-+------------------------------------------------------------------+
-|                    VeBetterDAO Relayer Node                       |
-+------------------------------------------------------------------+
-| Network    mainnet                           Block  24,237,183   |
-| Node       mainnet.vechain.org                                   |
-| Address    0xABCD...1234                      + Registered       |
-+------------------------------------------------------------------+
-| ROUND #88  * Active                                              |
-| Snapshot   24190328                        Deadline   24250807   |
-| Auto-voters  1209                                 Relayers   1   |
-| Voters     20949                  Total VOT3 206160737.01 VOT3   |
-+------------------------------------------------------------------+
-| Vote Wt    3                                      Claim Wt   1   |
-| Fee        10.00%                       Cap        100.00 B3TR   |
-| Early Access  43200 blocks                                       |
-+------------------------------------------------------------------+
-| THIS ROUND                                                       |
-| Completion 75.00%                               Missed     295   |
-| Pool       5000.00 B3TR                   Your share 1500 B3TR   |
-| Actions    120 (wt: 360)                       Total acts 2360   |
-|                                                                  |
-| PREVIOUS ROUND #87                                               |
-| Pool       5746.01 B3TR                   Your share 1200 B3TR   |
-| Actions    150                                     + Claimable   |
-+------------------------------------------------------------------+
+  VeBetterDAO Relayer Node  v0.0.5
+  ────────────────────────────────────────────────────────────
 
---- Activity Log --------------------------------------------------
-[10:30:15] Starting cast-vote cycle...
-[10:30:16] Found 1209 auto-voting users
-[10:30:18] 295 users need voting (914 already voted)
-[10:30:19] Batch 1/6 (50 users): + 50 OK (tx: 0x1234abcd...)
+  Network  mainnet                              Block 24,330,235
+  Node     mainnet.vechain.org
+  Address  0x5E80...3be4                              Registered
+
+  ────────────────────────────────────────────────────────────
+
+  Weights  vote=3 / claim=1           Fee 10.00% cap 100.00 B3TR
+
+  ────────────────────────────────────────────────────────────
+
+  Round #90  Voting complete
+    All votes cast. Waiting for round to end to start claiming rewards.
+
+  Auto-voters 1174                                   Relayers 41
+  Voters      18929
+  Snapshot    24311290                         Deadline 24371769
+  Early access ended
+
+  Voting      100.00%
+  Your actions 1 (wt: 3)                        Est. share 0.07%
+
+  ────────────────────────────────────────────────────────────
+
+  Round #89  Actions completed
+    All actions done. Pool unlocked.
+
+  Progress    100.00%                                   Missed 0
+  Pool        6667.89 B3TR
+  You earned  1234.56 B3TR                             ✓ Claimed
+  Your actions 520 (wt: 1560)
+
+─── Activity Log ─────────────────────────────────────────────────
+──────────── 🗳  Cast Vote · Round #90 ────────────
+[11:20:30 AM] Fetching users (snapshot block 24311290)...
+[11:20:31 AM] Found 1174 auto-voting users
+[11:20:31 AM] Checking vote status...
+[11:20:57 AM] 1135 voted · 39 ineligible · 0 pending
+[11:20:57 AM] Vote 0/1174 successful
+
+──────────── 💰  Claim Rewards · Round #89 ────────────
+[11:20:57 AM] Fetching users (snapshot block 24299120)...
+[11:21:01 AM] Checking claim status...
+[11:21:28 AM] 1131 claimed · 69 did not vote · 0 pending
+[11:21:28 AM] Claim 0/1200 successful
+
+[11:21:28 AM] Next cycle in 5m...
 ```
+
+### Round Statuses
+
+Each round displays one of these statuses:
+
+| Status | Meaning |
+|---|---|
+| **Voting in progress** | Active round, votes still being cast |
+| **Voting complete** | All votes cast, waiting for round to end |
+| **Claiming in progress** | Round ended, reward claims in progress |
+| **Actions completed** | All votes + claims done, pool unlocked |
+| **Rewards Locked** | Some users were missed — entire pool is locked |
+| **N/A** | No auto-voting users for this round |
 
 ## How It Works
 
@@ -206,11 +237,22 @@ Registered relayers get a head start. For the first ~5 days (43,200 blocks) afte
 | `MNEMONIC` | One of | -- | BIP39 mnemonic phrase |
 | `RELAYER_PRIVATE_KEY` | these two | -- | Hex private key (with or without `0x`) |
 | `RELAYER_NETWORK` | No | `mainnet` | `mainnet` or `testnet-staging` |
-| `NODE_URL` | No | Per network | Override Thor node URL |
+| `NODE_URL` | No | -- | Override Thor node URL (disables automatic node rotation) |
 | `BATCH_SIZE` | No | `50` | Users per transaction batch |
 | `DRY_RUN` | No | `0` | `1` to simulate without sending transactions |
 | `POLL_INTERVAL_MS` | No | `300000` | Milliseconds between cycles (min 60,000) |
 | `RUN_ONCE` | No | `0` | `1` to run a single cycle and exit |
+
+### Node Rotation
+
+By default the relayer rotates through multiple public VeChain nodes when a request fails (e.g. rate limiting, timeouts). The mainnet pool includes:
+
+- `mainnet.vechain.org`
+- `vethor-node.vechain.com`
+- `node-mainnet.vechain.energy`
+- `mainnet.vecha.in`
+
+If you set `NODE_URL`, only that single node is used and rotation is disabled.
 
 ### Docker Secrets
 
