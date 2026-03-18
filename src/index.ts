@@ -21,7 +21,7 @@ import * as fs from "fs"
 import { ThorClient } from "@vechain/sdk-network"
 import { Address, HDKey } from "@vechain/sdk-core"
 import chalk from "chalk"
-import { getNetworkConfig } from "./config"
+import { getNetworkConfig, getNodePool } from "./config"
 import { fetchSummary } from "./contracts"
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
 import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
@@ -100,14 +100,28 @@ function logRaw(msg: string) {
 
 async function main() {
   const network = process.env.RELAYER_NETWORK || "mainnet"
-  const config = getNetworkConfig(network, process.env.NODE_URL?.trim())
+  const nodeUrlOverride = process.env.NODE_URL?.trim()
+  const config = getNetworkConfig(network, nodeUrlOverride)
   const { walletAddress, privateKey } = getWallet()
   const batchSize = Math.max(1, parseInt(process.env.BATCH_SIZE || "50", 10) || 50)
   const dryRun = envBool("DRY_RUN")
   const pollMs = Math.max(60_000, parseInt(process.env.POLL_INTERVAL_MS || "300000", 10) || 300_000)
   const runOnce = envBool("RUN_ONCE")
 
-  const thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+  // Node pool for automatic failover.
+  // If the user explicitly set NODE_URL, use only that node (no rotation).
+  const nodePool = nodeUrlOverride ? [nodeUrlOverride] : getNodePool(network)
+  let nodeIndex = 0
+  let thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+
+  function rotateNode() {
+    if (nodePool.length <= 1) return
+    nodeIndex = (nodeIndex + 1) % nodePool.length
+    config.nodeUrl = nodePool[nodeIndex]
+    thor = ThorClient.at(config.nodeUrl, { isPollingEnabled: false })
+    const host = new URL(config.nodeUrl).hostname
+    log(chalk.yellow(`Rotating to node: ${host}`))
+  }
 
   let running = true
   let forceExit = false
@@ -123,11 +137,10 @@ async function main() {
   process.on("SIGINT", shutdown)
   process.on("SIGTERM", shutdown)
 
-  const CYCLE_RETRIES = 3
+  const CYCLE_RETRIES = nodePool.length
   const CYCLE_RETRY_MS = 3000
 
   function refreshScreen(summary: Awaited<ReturnType<typeof fetchSummary>>) {
-    // \x1B[2J clears the screen, \x1B[H moves cursor to top-left
     process.stdout.write("\x1B[2J\x1B[H")
     console.log(renderSummary(summary))
     console.log("")
@@ -135,6 +148,14 @@ async function main() {
     for (const entry of activityLog.slice(-30)) {
       console.log(entry)
     }
+  }
+
+  // Show summary immediately on startup
+  try {
+    const initial = await fetchSummary(thor, config, walletAddress)
+    refreshScreen(initial)
+  } catch {
+    log(chalk.yellow("Could not fetch initial summary, starting cycles..."))
   }
 
   while (running) {
@@ -167,6 +188,7 @@ async function main() {
         lastErr = err
         if (attempt < CYCLE_RETRIES) {
           log(chalk.yellow(`Cycle attempt ${attempt}/${CYCLE_RETRIES} failed, retrying in ${CYCLE_RETRY_MS / 1000}s...`))
+          rotateNode()
           await new Promise((r) => setTimeout(r, CYCLE_RETRY_MS))
         }
       }

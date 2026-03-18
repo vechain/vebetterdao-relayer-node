@@ -1,4 +1,5 @@
 import chalk from "chalk"
+import { version as PKG_VERSION } from "../package.json"
 import { RelayerSummary, CycleResult } from "./types"
 
 function formatB3TR(wei: bigint): string {
@@ -137,7 +138,7 @@ export function renderSummary(s: RelayerSummary): string {
 
   // Header
   out.push("")
-  out.push(heading("  VeBetterDAO Relayer Node"))
+  out.push(heading("  VeBetterDAO Relayer Node") + "  " + chalk.dim(`v${PKG_VERSION}`))
   out.push(divider())
   out.push("")
 
