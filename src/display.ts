@@ -36,7 +36,7 @@ function heading(text: string): string {
   return chalk.bold.cyan(text)
 }
 
-function lbl(text: string): string {
+function dimLabel(text: string): string {
   return chalk.dim(text)
 }
 
@@ -143,9 +143,9 @@ export function renderSummary(s: RelayerSummary): string {
   out.push("")
 
   const regStatus = s.isRegistered ? chalk.green("Registered") : chalk.red("Not registered")
-  out.push("  " + pad(lbl("Network") + "  " + chalk.white.bold(s.network), lbl("Block") + " " + chalk.white(s.latestBlock.toLocaleString())))
-  out.push("  " + pad(lbl("Node") + "     " + chalk.gray(new URL(s.nodeUrl).hostname), ""))
-  out.push("  " + pad(lbl("Address") + "  " + chalk.yellow(shortAddr(s.relayerAddress)), regStatus))
+  out.push("  " + pad(dimLabel("Network") + "  " + chalk.white.bold(s.network), dimLabel("Block") + " " + chalk.white(s.latestBlock.toLocaleString())))
+  out.push("  " + pad(dimLabel("Node") + "     " + chalk.gray(new URL(s.nodeUrl).hostname), ""))
+  out.push("  " + pad(dimLabel("Address") + "  " + chalk.yellow(shortAddr(s.relayerAddress)), regStatus))
   if (!s.isRegistered) {
     out.push("  " + chalk.red.italic("  Go to relayer.vebetterdao.org/new-relayer to register as a relayer"))
   }
@@ -157,8 +157,8 @@ export function renderSummary(s: RelayerSummary): string {
   // Config (compact)
   const feeStr = s.feeDenominator > 0n ? pct(s.feePercentage, s.feeDenominator) : "—"
   out.push("  " + pad(
-    lbl("Weights") + "  " + chalk.white("vote=" + s.voteWeight.toString()) + chalk.dim(" / ") + chalk.white("claim=" + s.claimWeight.toString()),
-    lbl("Fee") + " " + chalk.yellow(feeStr) + chalk.dim(" cap ") + chalk.yellow(formatB3TR(s.feeCap)),
+    dimLabel("Weights") + "  " + chalk.white("vote=" + s.voteWeight.toString()) + chalk.dim(" / ") + chalk.white("claim=" + s.claimWeight.toString()),
+    dimLabel("Fee") + " " + chalk.yellow(feeStr) + chalk.dim(" cap ") + chalk.yellow(formatB3TR(s.feeCap)),
   ))
 
   // ── Current Round ─────────────────────────────────────────
@@ -171,17 +171,17 @@ export function renderSummary(s: RelayerSummary): string {
   out.push("  " + heading(`Round #${s.currentRoundId}`) + "  " + currentStatus.render)
   out.push("  " + chalk.italic.dim("  " + currentStatus.hint))
   out.push("")
-  out.push("  " + pad(lbl("Auto-voters") + " " + chalk.white.bold(s.autoVotingUsers.toString()), lbl("Relayers") + " " + chalk.white.bold(s.registeredRelayers.length.toString())))
-  out.push("  " + pad(lbl("Voters") + "      " + chalk.white(s.totalVoters.toString()), ""))
-  out.push("  " + pad(lbl("Snapshot") + "    " + chalk.white(s.roundSnapshot.toString()), lbl("Deadline") + " " + chalk.white(s.roundDeadline.toString())))
+  out.push("  " + pad(dimLabel("Auto-voters") + " " + chalk.white.bold(s.autoVotingUsers.toString()), dimLabel("Relayers") + " " + chalk.white.bold(s.registeredRelayers.length.toString())))
+  out.push("  " + pad(dimLabel("Voters") + "      " + chalk.white(s.totalVoters.toString()), ""))
+  out.push("  " + pad(dimLabel("Snapshot") + "    " + chalk.white(s.roundSnapshot.toString()), dimLabel("Deadline") + " " + chalk.white(s.roundDeadline.toString())))
 
   // Early access: voting window = snapshot + earlyAccessBlocks
   const voteEaEnd = s.roundSnapshot + Number(s.earlyAccessBlocks)
   const voteEaRemaining = voteEaEnd - s.latestBlock
   if (voteEaRemaining > 0) {
-    out.push("  " + lbl("Early access") + " " + chalk.white("ends in " + voteEaRemaining.toLocaleString() + " blocks"))
+    out.push("  " + dimLabel("Early access") + " " + chalk.white("ends in " + voteEaRemaining.toLocaleString() + " blocks"))
   } else {
-    out.push("  " + lbl("Early access") + " " + chalk.dim("ended"))
+    out.push("  " + dimLabel("Early access") + " " + chalk.dim("ended"))
   }
 
   out.push("")
@@ -193,7 +193,7 @@ export function renderSummary(s: RelayerSummary): string {
   const votingDone = votingPortion > 0n && s.currentCompletedWeighted >= votingPortion
   const votingColor = votingDone ? chalk.green : chalk.yellow
   out.push("  " + pad(
-    lbl("Voting") + "      " + votingColor(votingPctStr),
+    dimLabel("Voting") + "      " + votingColor(votingPctStr),
     "",
   ))
 
@@ -202,8 +202,8 @@ export function renderSummary(s: RelayerSummary): string {
     ? pct(s.currentRelayerWeighted, s.currentTotalWeighted)
     : "—"
   out.push("  " + pad(
-    lbl("Your actions") + " " + chalk.white(s.currentRelayerActions.toString()) + chalk.dim(" (wt: ") + chalk.white(s.currentRelayerWeighted.toString()) + chalk.dim(")"),
-    lbl("Est. share") + " " + chalk.cyan(projectedShareStr),
+    dimLabel("Your actions") + " " + chalk.white(s.currentRelayerActions.toString()) + chalk.dim(" (wt: ") + chalk.white(s.currentRelayerWeighted.toString()) + chalk.dim(")"),
+    dimLabel("Est. share") + " " + chalk.cyan(projectedShareStr),
   ))
 
   // ── Previous Round ────────────────────────────────────────
@@ -222,9 +222,9 @@ export function renderSummary(s: RelayerSummary): string {
       const claimEaEnd = s.previousRoundDeadline + Number(s.earlyAccessBlocks)
       const claimEaRemaining = claimEaEnd - s.latestBlock
       if (claimEaRemaining > 0) {
-        out.push("  " + lbl("  Early access") + " " + chalk.white("ends in " + claimEaRemaining.toLocaleString() + " blocks"))
+        out.push("  " + dimLabel("  Early access") + " " + chalk.white("ends in " + claimEaRemaining.toLocaleString() + " blocks"))
       } else {
-        out.push("  " + lbl("  Early access") + " " + chalk.dim("ended"))
+        out.push("  " + dimLabel("  Early access") + " " + chalk.dim("ended"))
       }
     }
 
@@ -238,13 +238,13 @@ export function renderSummary(s: RelayerSummary): string {
       else if (prevStatus.label === "Rewards Locked") progressColor = chalk.red
       else progressColor = chalk.magenta
       out.push("  " + pad(
-        lbl("Progress") + "    " + progressColor(overallPct),
-        lbl("Missed") + " " + (s.previousMissedUsers > 0n ? chalk.red(s.previousMissedUsers.toString()) : chalk.green(s.previousMissedUsers.toString())),
+        dimLabel("Progress") + "    " + progressColor(overallPct),
+        dimLabel("Missed") + " " + (s.previousMissedUsers > 0n ? chalk.red(s.previousMissedUsers.toString()) : chalk.green(s.previousMissedUsers.toString())),
       ))
     }
 
     out.push("  " + pad(
-      lbl("Pool") + "        " + chalk.green(formatB3TR(s.previousTotalRewards)),
+      dimLabel("Pool") + "        " + chalk.green(formatB3TR(s.previousTotalRewards)),
       "",
     ))
 
@@ -256,23 +256,23 @@ export function renderSummary(s: RelayerSummary): string {
 
     if (alreadyClaimed) {
       out.push("  " + pad(
-        lbl("You earned") + "  " + chalk.greenBright.bold(formatB3TR(earnedWei)),
+        dimLabel("You earned") + "  " + chalk.greenBright.bold(formatB3TR(earnedWei)),
         chalk.green("✓ Claimed"),
       ))
     } else if (s.previousRelayerClaimable > 0n) {
       out.push("  " + pad(
-        lbl("Your share") + "  " + chalk.greenBright.bold(formatB3TR(s.previousRelayerClaimable)),
+        dimLabel("Your share") + "  " + chalk.greenBright.bold(formatB3TR(s.previousRelayerClaimable)),
         chalk.yellow("Unclaimed"),
       ))
     } else {
       out.push("  " + pad(
-        lbl("Your share") + "  " + chalk.dim("0.00 B3TR"),
+        dimLabel("Your share") + "  " + chalk.dim("0.00 B3TR"),
         "",
       ))
     }
 
     out.push("  " + pad(
-      lbl("Your actions") + " " + chalk.white(s.previousRelayerActions.toString()) + chalk.dim(" (wt: ") + chalk.white(s.previousRelayerWeighted.toString()) + chalk.dim(")"),
+      dimLabel("Your actions") + " " + chalk.white(s.previousRelayerActions.toString()) + chalk.dim(" (wt: ") + chalk.white(s.previousRelayerWeighted.toString()) + chalk.dim(")"),
       "",
     ))
   }
