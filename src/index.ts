@@ -24,7 +24,7 @@ import chalk from "chalk"
 import { getNetworkConfig } from "./config"
 import { fetchSummary } from "./contracts"
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
-import { renderSummary, renderCycleResult, timestamp } from "./display"
+import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
 
 const SECRETS_DIR = "/run/secrets"
 const ALLOWED_SECRETS = new Set(["mnemonic", "relayer_private_key"])
@@ -92,6 +92,12 @@ function log(msg: string) {
   console.log(entry)
 }
 
+function logRaw(msg: string) {
+  activityLog.push(msg)
+  if (activityLog.length > MAX_LOG) activityLog.shift()
+  console.log(msg)
+}
+
 async function main() {
   const network = process.env.RELAYER_NETWORK || "mainnet"
   const config = getNetworkConfig(network, process.env.NODE_URL?.trim())
@@ -120,44 +126,41 @@ async function main() {
   const CYCLE_RETRIES = 3
   const CYCLE_RETRY_MS = 3000
 
+  function refreshScreen(summary: Awaited<ReturnType<typeof fetchSummary>>) {
+    // \x1B[2J clears the screen, \x1B[H moves cursor to top-left
+    process.stdout.write("\x1B[2J\x1B[H")
+    console.log(renderSummary(summary))
+    console.log("")
+    console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
+    for (const entry of activityLog.slice(-30)) {
+      console.log(entry)
+    }
+  }
+
   while (running) {
     let lastErr: unknown
     for (let attempt = 1; attempt <= CYCLE_RETRIES; attempt++) {
       try {
-        // Fetch and display summary
         const summary = await fetchSummary(thor, config, walletAddress)
-        console.clear()
-        console.log(renderSummary(summary))
-        console.log("")
-        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
-
-        // Replay recent log entries after clear
-        for (const entry of activityLog.slice(-30)) {
-          console.log(entry)
-        }
 
         // Run cycles
         if (summary.isRoundActive) {
-          log("Starting cast-vote cycle...")
+          logRaw(logSectionHeader("vote", summary.currentRoundId))
           const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
           renderCycleResult(voteResult).forEach(log)
         } else {
-          log("Round not active, skipping cast-vote")
+          log(chalk.dim("Round not active, skipping cast-vote"))
         }
 
-        log("Starting claim cycle...")
+        logRaw("")
+        logRaw(logSectionHeader("claim", summary.previousRoundId))
         const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
         renderCycleResult(claimResult).forEach(log)
 
-        // Re-fetch and display updated summary
+        // Render once after all work is done
         const updated = await fetchSummary(thor, config, walletAddress)
-        console.clear()
-        console.log(renderSummary(updated))
-        console.log("")
-        console.log(chalk.bold("─── Activity Log ") + "─".repeat(49))
-        for (const entry of activityLog.slice(-30)) {
-          console.log(entry)
-        }
+        refreshScreen(updated)
+
         lastErr = undefined
         break
       } catch (err) {
@@ -177,7 +180,8 @@ async function main() {
       break
     }
 
-    log(`Next cycle in ${(pollMs / 60_000).toFixed(0)}m...`)
+    logRaw("")
+    log(chalk.dim(`Next cycle in ${(pollMs / 60_000).toFixed(0)}m...`))
     await new Promise((r) => setTimeout(r, pollMs))
   }
 }

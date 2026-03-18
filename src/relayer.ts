@@ -4,6 +4,7 @@ import {
   XAllocationVoting__factory,
   VoterRewards__factory,
 } from "@vechain/vebetterdao-contracts/typechain-types"
+import chalk from "chalk"
 import { NetworkConfig, CycleResult, LogFn } from "./types"
 import {
   getCurrentRoundId,
@@ -67,7 +68,7 @@ async function processBatch(
     const batch = queue.splice(0, batchSize)
     const clauses = batch.map(clauseBuilder)
 
-    log(`Batch ${batchNum}/${totalBatches} (${batch.length} users): simulating...`)
+    log(chalk.dim(`Batch ${batchNum}/${totalBatches} (${batch.length} users): simulating...`))
 
     try {
       const gasResult = await thor.gas.estimateGas(clauses, walletAddress, { gasPadding: 0.1 })
@@ -187,9 +188,9 @@ export async function runCastVoteCycle(
   const roundId = await getCurrentRoundId(thor, config.xAllocationVotingAddress)
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, roundId)
 
-  log(`Fetching auto-voting users (round #${roundId}, snapshot block ${snapshot})...`)
+  log(`Fetching users (snapshot block ${snapshot})...`)
   const allUsers = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, snapshot)
-  log(`Found ${allUsers.length} auto-voting users`)
+  log(`Found ${chalk.white.bold(allUsers.length.toString())} auto-voting users`)
 
   if (allUsers.length === 0) {
     return { phase: "vote", roundId, totalUsers: 0, successful: 0, failed: [], transient: [], txIds: [], dryRun }
@@ -206,7 +207,6 @@ export async function runCastVoteCycle(
     latestBlock,
   )
 
-  // Check who already voted (batched to avoid overwhelming the node)
   log("Checking vote status...")
   const unprocessed: string[] = []
   let voted = 0
@@ -226,7 +226,7 @@ export async function runCastVoteCycle(
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${allUsers.length} auto-voting users: ${voted} voted, ${ineligible} ineligible, ${unprocessed.length} pending`)
+  log(`${chalk.green(voted.toString())} voted · ${chalk.yellow(ineligible.toString())} ineligible · ${chalk.cyan(unprocessed.length.toString())} pending`)
 
   if (unprocessed.length === 0) {
     return { phase: "vote", roundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
@@ -266,7 +266,7 @@ export async function runClaimRewardCycle(
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, previousRoundId)
   const deadline = await getRoundDeadline(thor, config.xAllocationVotingAddress, previousRoundId)
 
-  log(`Fetching auto-voting users for previous round #${previousRoundId}...`)
+  log(`Fetching users (snapshot block ${snapshot})...`)
   const allUsers = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, snapshot)
 
   if (allUsers.length === 0) {
@@ -284,7 +284,7 @@ export async function runClaimRewardCycle(
     latestBlock,
   )
 
-  log("Checking vote status for previous round...")
+  log("Checking claim status...")
   const unclaimed: string[] = []
   let didNotVote = 0
   let alreadyClaimed = 0
@@ -303,7 +303,7 @@ export async function runClaimRewardCycle(
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${allUsers.length} auto-voting users: ${alreadyClaimed} claimed, ${didNotVote} did not vote, ${unclaimed.length} pending`)
+  log(`${chalk.green(alreadyClaimed.toString())} claimed · ${chalk.red(didNotVote.toString())} did not vote · ${chalk.cyan(unclaimed.length.toString())} pending`)
 
   if (unclaimed.length === 0) {
     return { phase: "claim", roundId: previousRoundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
