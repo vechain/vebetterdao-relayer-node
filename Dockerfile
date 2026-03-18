@@ -9,6 +9,7 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 npx tsc
 RUN npm prune --production
 
 FROM node:20-alpine3.23
+RUN apk update && apk upgrade -U && rm -rf /var/cache/apk/*
 WORKDIR /app
 COPY --from=builder /sbin/tini /sbin/tini
 COPY --from=builder /app/dist ./dist
