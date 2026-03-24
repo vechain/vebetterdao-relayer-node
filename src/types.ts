@@ -13,6 +13,7 @@ export interface RelayerSummary {
   relayerAddress: string
   isRegistered: boolean
   registeredRelayers: string[]
+  preferredUsersCount: number
 
   currentRoundId: number
   roundSnapshot: number

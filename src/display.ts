@@ -149,6 +149,9 @@ export function renderSummary(s: RelayerSummary): string {
   if (!s.isRegistered) {
     out.push("  " + chalk.red.italic("  Go to relayer.vebetterdao.org/new-relayer to register as a relayer"))
   }
+  if (s.preferredUsersCount > 0) {
+    out.push("  " + dimLabel("Preferred") + " " + chalk.cyan.bold(s.preferredUsersCount.toString()) + chalk.dim(" users chose you as default"))
+  }
 
   out.push("")
   out.push(divider())

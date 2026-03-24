@@ -13,6 +13,8 @@ import {
   getAutoVotingUsers,
   getAlreadySkippedVotersForRound,
   getAlreadyClaimedForRound,
+  getPreferredRelayersForUsers,
+  getEarlyAccessBlocks,
   hasVoted,
 } from "./contracts"
 
@@ -207,6 +209,18 @@ export async function runCastVoteCycle(
     latestBlock,
   )
 
+  // During early access, skip users who have a different preferred relayer
+  const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
+  const voteEarlyAccessEnd = snapshot + Number(earlyAccessBlocks)
+  const isEarlyAccess = latestBlock < voteEarlyAccessEnd
+
+  let preferredMap = new Map<string, string>()
+  let skippedPreferred = 0
+  if (isEarlyAccess) {
+    log(chalk.dim("Early access active — respecting preferred relayer preferences"))
+    preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers)
+  }
+
   log("Checking vote status...")
   const unprocessed: string[] = []
   let voted = 0
@@ -220,13 +234,21 @@ export async function runCastVoteCycle(
         voted++
       } else if (skippedSet.has(chunk[j].toLowerCase())) {
         ineligible++
+      } else if (isEarlyAccess) {
+        const pref = preferredMap.get(chunk[j].toLowerCase())
+        if (pref && pref !== walletAddress.toLowerCase()) {
+          skippedPreferred++
+        } else {
+          unprocessed.push(chunk[j])
+        }
       } else {
         unprocessed.push(chunk[j])
       }
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${chalk.green(voted.toString())} voted · ${chalk.yellow(ineligible.toString())} ineligible · ${chalk.cyan(unprocessed.length.toString())} pending`)
+  const prefStr = skippedPreferred > 0 ? ` · ${chalk.dim(skippedPreferred.toString())} other relayer preferred` : ""
+  log(`${chalk.green(voted.toString())} voted · ${chalk.yellow(ineligible.toString())} ineligible · ${chalk.cyan(unprocessed.length.toString())} pending${prefStr}`)
 
   if (unprocessed.length === 0) {
     return { phase: "vote", roundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
@@ -284,6 +306,18 @@ export async function runClaimRewardCycle(
     latestBlock,
   )
 
+  // During early access, skip users who have a different preferred relayer
+  const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
+  const claimEarlyAccessEnd = deadline + Number(earlyAccessBlocks)
+  const isEarlyAccess = latestBlock < claimEarlyAccessEnd
+
+  let preferredMap = new Map<string, string>()
+  let skippedPreferred = 0
+  if (isEarlyAccess) {
+    log(chalk.dim("Early access active — respecting preferred relayer preferences"))
+    preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers)
+  }
+
   log("Checking claim status...")
   const unclaimed: string[] = []
   let didNotVote = 0
@@ -297,13 +331,21 @@ export async function runClaimRewardCycle(
         didNotVote++
       } else if (claimedSet.has(chunk[j].toLowerCase())) {
         alreadyClaimed++
+      } else if (isEarlyAccess) {
+        const pref = preferredMap.get(chunk[j].toLowerCase())
+        if (pref && pref !== walletAddress.toLowerCase()) {
+          skippedPreferred++
+        } else {
+          unclaimed.push(chunk[j])
+        }
       } else {
         unclaimed.push(chunk[j])
       }
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${chalk.green(alreadyClaimed.toString())} claimed · ${chalk.red(didNotVote.toString())} did not vote · ${chalk.cyan(unclaimed.length.toString())} pending`)
+  const prefStr = skippedPreferred > 0 ? ` · ${chalk.dim(skippedPreferred.toString())} other relayer preferred` : ""
+  log(`${chalk.green(alreadyClaimed.toString())} claimed · ${chalk.red(didNotVote.toString())} did not vote · ${chalk.cyan(unclaimed.length.toString())} pending${prefStr}`)
 
   if (unclaimed.length === 0) {
     return { phase: "claim", roundId: previousRoundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
