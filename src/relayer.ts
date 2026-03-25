@@ -214,7 +214,7 @@ export async function runCastVoteCycle(
   const voteEarlyAccessEnd = snapshot + Number(earlyAccessBlocks)
   const isEarlyAccess = latestBlock < voteEarlyAccessEnd
 
-  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers)
+  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers, log)
   const myAddress = walletAddress.toLowerCase()
   let preferUs = 0
   let preferOther = 0
@@ -241,15 +241,16 @@ export async function runCastVoteCycle(
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
     for (let j = 0; j < chunk.length; j++) {
-      if (checks[j]) {
-        voted++
-      } else if (skippedSet.has(chunk[j].toLowerCase())) {
-        ineligible++
-      } else if (isEarlyAccess && preferredMap.has(chunk[j].toLowerCase()) && preferredMap.get(chunk[j].toLowerCase()) !== myAddress) {
-        skippedPreferred++
-      } else {
-        unprocessed.push(chunk[j])
-      }
+      const user = chunk[j].toLowerCase()
+
+      if (checks[j]) { voted++; continue }
+      if (skippedSet.has(user)) { ineligible++; continue }
+
+      // During early access, skip users who prefer a different relayer
+      const pref = preferredMap.get(user)
+      if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
+
+      unprocessed.push(chunk[j])
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
@@ -317,7 +318,7 @@ export async function runClaimRewardCycle(
   const claimEarlyAccessEnd = deadline + Number(earlyAccessBlocks)
   const isEarlyAccess = latestBlock < claimEarlyAccessEnd
 
-  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers)
+  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers, log)
   const myAddress = walletAddress.toLowerCase()
   let preferUs = 0
   let preferOther = 0
@@ -344,15 +345,16 @@ export async function runClaimRewardCycle(
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, u)))
     for (let j = 0; j < chunk.length; j++) {
-      if (!checks[j]) {
-        didNotVote++
-      } else if (claimedSet.has(chunk[j].toLowerCase())) {
-        alreadyClaimed++
-      } else if (isEarlyAccess && preferredMap.has(chunk[j].toLowerCase()) && preferredMap.get(chunk[j].toLowerCase()) !== myAddress) {
-        skippedPreferred++
-      } else {
-        unclaimed.push(chunk[j])
-      }
+      const user = chunk[j].toLowerCase()
+
+      if (!checks[j]) { didNotVote++; continue }
+      if (claimedSet.has(user)) { alreadyClaimed++; continue }
+
+      // During early access, skip users who prefer a different relayer
+      const pref = preferredMap.get(user)
+      if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
+
+      unclaimed.push(chunk[j])
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }

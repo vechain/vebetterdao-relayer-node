@@ -1,5 +1,6 @@
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
+import { LogFn } from "./types"
 import {
   XAllocationVoting__factory,
   VoterRewards__factory,
@@ -178,14 +179,15 @@ export async function getPreferredRelayersForUsers(
   thor: ThorClient,
   poolAddress: string,
   users: string[],
+  log?: LogFn,
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>()
   if (users.length === 0) return result
 
+  const fn = rrpAbi.getFunction("getPreferredRelayer")
   const BATCH = 100
   for (let i = 0; i < users.length; i += BATCH) {
     const chunk = users.slice(i, i + BATCH)
-    const fn = rrpAbi.getFunction("getPreferredRelayer")
     const clauses = chunk.map((user) => ({
       to: poolAddress,
       value: "0x0",
@@ -195,16 +197,17 @@ export async function getPreferredRelayersForUsers(
     const results = await thor.transactions.simulateTransaction(clauses)
     for (let j = 0; j < results.length; j++) {
       const sim = results[j]
-      if (sim && !sim.reverted && sim.data && sim.data !== "0x") {
-        try {
-          const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
-          const addr = (decoded[0] as string).toLowerCase()
-          if (addr !== ZERO_ADDRESS) {
-            result.set(chunk[j].toLowerCase(), addr)
-          }
-        } catch {
-          // skip decode errors
+      if (!sim || sim.reverted || !sim.data || sim.data === "0x") continue
+
+      try {
+        const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
+        const addr = (decoded[0] as string).toLowerCase()
+        if (addr !== ZERO_ADDRESS) {
+          result.set(chunk[j].toLowerCase(), addr)
         }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        log?.(`Warning: failed to decode preferred relayer for ${chunk[j].slice(0, 10)}...: ${reason}`)
       }
     }
   }
