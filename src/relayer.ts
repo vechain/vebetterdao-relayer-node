@@ -13,6 +13,8 @@ import {
   getAutoVotingUsers,
   getAlreadySkippedVotersForRound,
   getAlreadyClaimedForRound,
+  getPreferredRelayersForUsers,
+  getEarlyAccessBlocks,
   hasVoted,
 } from "./contracts"
 
@@ -207,26 +209,53 @@ export async function runCastVoteCycle(
     latestBlock,
   )
 
+  // Fetch preferred relayer preferences for all users
+  const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
+  const voteEarlyAccessEnd = snapshot + Number(earlyAccessBlocks)
+  const isEarlyAccess = latestBlock < voteEarlyAccessEnd
+
+  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers, log)
+  const myAddress = walletAddress.toLowerCase()
+  let preferUs = 0
+  let preferOther = 0
+  for (const relayer of preferredMap.values()) {
+    if (relayer === myAddress) preferUs++
+    else preferOther++
+  }
+  const noPreference = allUsers.length - preferUs - preferOther
+
+  if (preferredMap.size > 0) {
+    log(`Preferred relayer: ${chalk.cyan(preferUs.toString())} us · ${chalk.yellow(preferOther.toString())} others · ${chalk.dim(noPreference.toString())} no preference`)
+  }
+  if (isEarlyAccess && preferOther > 0) {
+    log(chalk.dim(`Early access active — skipping ${preferOther} users who prefer another relayer`))
+  }
+
   log("Checking vote status...")
   const unprocessed: string[] = []
   let voted = 0
   let ineligible = 0
+  let skippedPreferred = 0
   const CHECK_BATCH = 10
   for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, roundId, u)))
     for (let j = 0; j < chunk.length; j++) {
-      if (checks[j]) {
-        voted++
-      } else if (skippedSet.has(chunk[j].toLowerCase())) {
-        ineligible++
-      } else {
-        unprocessed.push(chunk[j])
-      }
+      const user = chunk[j].toLowerCase()
+
+      if (checks[j]) { voted++; continue }
+      if (skippedSet.has(user)) { ineligible++; continue }
+
+      // During early access, skip users who prefer a different relayer
+      const pref = preferredMap.get(user)
+      if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
+
+      unprocessed.push(chunk[j])
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${chalk.green(voted.toString())} voted · ${chalk.yellow(ineligible.toString())} ineligible · ${chalk.cyan(unprocessed.length.toString())} pending`)
+  const prefStr = skippedPreferred > 0 ? ` · ${chalk.magenta(skippedPreferred.toString())} reserved` : ""
+  log(`${chalk.green(voted.toString())} voted · ${chalk.yellow(ineligible.toString())} ineligible · ${chalk.cyan(unprocessed.length.toString())} pending${prefStr}`)
 
   if (unprocessed.length === 0) {
     return { phase: "vote", roundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }
@@ -284,26 +313,53 @@ export async function runClaimRewardCycle(
     latestBlock,
   )
 
+  // Fetch preferred relayer preferences for all users
+  const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
+  const claimEarlyAccessEnd = deadline + Number(earlyAccessBlocks)
+  const isEarlyAccess = latestBlock < claimEarlyAccessEnd
+
+  const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, allUsers, log)
+  const myAddress = walletAddress.toLowerCase()
+  let preferUs = 0
+  let preferOther = 0
+  for (const relayer of preferredMap.values()) {
+    if (relayer === myAddress) preferUs++
+    else preferOther++
+  }
+  const noPreference = allUsers.length - preferUs - preferOther
+
+  if (preferredMap.size > 0) {
+    log(`Preferred relayer: ${chalk.cyan(preferUs.toString())} us · ${chalk.yellow(preferOther.toString())} others · ${chalk.dim(noPreference.toString())} no preference`)
+  }
+  if (isEarlyAccess && preferOther > 0) {
+    log(chalk.dim(`Early access active — skipping ${preferOther} users who prefer another relayer`))
+  }
+
   log("Checking claim status...")
   const unclaimed: string[] = []
   let didNotVote = 0
   let alreadyClaimed = 0
+  let skippedPreferred = 0
   const CHECK_BATCH = 10
   for (let i = 0; i < allUsers.length; i += CHECK_BATCH) {
     const chunk = allUsers.slice(i, i + CHECK_BATCH)
     const checks = await Promise.all(chunk.map((u) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, u)))
     for (let j = 0; j < chunk.length; j++) {
-      if (!checks[j]) {
-        didNotVote++
-      } else if (claimedSet.has(chunk[j].toLowerCase())) {
-        alreadyClaimed++
-      } else {
-        unclaimed.push(chunk[j])
-      }
+      const user = chunk[j].toLowerCase()
+
+      if (!checks[j]) { didNotVote++; continue }
+      if (claimedSet.has(user)) { alreadyClaimed++; continue }
+
+      // During early access, skip users who prefer a different relayer
+      const pref = preferredMap.get(user)
+      if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
+
+      unclaimed.push(chunk[j])
     }
     if (i + CHECK_BATCH < allUsers.length) await delay(150)
   }
-  log(`${chalk.green(alreadyClaimed.toString())} claimed · ${chalk.red(didNotVote.toString())} did not vote · ${chalk.cyan(unclaimed.length.toString())} pending`)
+  const prefStr = skippedPreferred > 0 ? ` · ${chalk.magenta(skippedPreferred.toString())} reserved` : ""
+  log(`${chalk.green(alreadyClaimed.toString())} claimed · ${chalk.red(didNotVote.toString())} did not vote · ${chalk.cyan(unclaimed.length.toString())} pending${prefStr}`)
 
   if (unclaimed.length === 0) {
     return { phase: "claim", roundId: previousRoundId, totalUsers: allUsers.length, successful: 0, failed: [], transient: [], txIds: [], dryRun }

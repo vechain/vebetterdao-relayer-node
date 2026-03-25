@@ -1,5 +1,6 @@
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
+import { LogFn } from "./types"
 import {
   XAllocationVoting__factory,
   VoterRewards__factory,
@@ -159,6 +160,59 @@ export async function getRelayerActions(thor: ThorClient, addr: string, relayer:
 export async function getRelayerWeightedActions(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
   const r = await call(thor, addr, rrpAbi, "totalRelayerWeightedActions", [relayer, roundId])
   return BigInt(r[0])
+}
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+export async function getPreferredRelayer(thor: ThorClient, addr: string, user: string): Promise<string | undefined> {
+  const r = await call(thor, addr, rrpAbi, "getPreferredRelayer", [user])
+  const relayer = r[0] as string
+  if (!relayer || relayer.toLowerCase() === ZERO_ADDRESS) return undefined
+  return relayer.toLowerCase()
+}
+
+/**
+ * Batch-fetch preferred relayers for a list of users using simulate.
+ * Returns a Map of user → preferred relayer address (lowercase), only for users that have one set.
+ */
+export async function getPreferredRelayersForUsers(
+  thor: ThorClient,
+  poolAddress: string,
+  users: string[],
+  log?: LogFn,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>()
+  if (users.length === 0) return result
+
+  const fn = rrpAbi.getFunction("getPreferredRelayer")
+  const BATCH = 100
+  for (let i = 0; i < users.length; i += BATCH) {
+    const chunk = users.slice(i, i + BATCH)
+    const clauses = chunk.map((user) => ({
+      to: poolAddress,
+      value: "0x0",
+      data: fn.encodeData([user]).toString(),
+    }))
+
+    const results = await thor.transactions.simulateTransaction(clauses)
+    for (let j = 0; j < results.length; j++) {
+      const sim = results[j]
+      if (!sim || sim.reverted || !sim.data || sim.data === "0x") continue
+
+      try {
+        const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
+        const addr = (decoded[0] as string).toLowerCase()
+        if (addr !== ZERO_ADDRESS) {
+          result.set(chunk[j].toLowerCase(), addr)
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        log?.(`Warning: failed to decode preferred relayer for ${chunk[j].slice(0, 10)}...: ${reason}`)
+      }
+    }
+  }
+
+  return result
 }
 
 // ── Event fetching: auto-voting users ───────────────────────
@@ -334,6 +388,57 @@ export async function getAlreadyClaimedForRound(
   return claimed
 }
 
+// ── Preferred relayer count ──────────────────────────────────
+
+/**
+ * Count how many users currently have the given relayer as their preferred relayer.
+ * Fetches all PreferredRelayerSet events and builds a latest-preference map.
+ */
+export async function getPreferredRelayerUserCount(
+  thor: ThorClient,
+  poolAddress: string,
+  relayerAddress: string,
+): Promise<number> {
+  const event = rrpAbi.getEvent("PreferredRelayerSet") as any
+  const topics = event.encodeFilterTopicsNoNull({})
+
+  const allEvents: Array<{ user: string; relayer: string }> = []
+  let offset = 0
+
+  while (true) {
+    const logs = await thor.logs.filterEventLogs({
+      options: { offset, limit: MAX_EVENTS },
+      order: "asc",
+      criteriaSet: [{ criteria: { address: poolAddress, topic0: topics[0] }, eventAbi: event }],
+    })
+    for (const log of logs) {
+      const decoded = event.decodeEventLog({
+        topics: log.topics.map((t: string) => Hex.of(t)),
+        data: Hex.of(log.data),
+      })
+      allEvents.push({
+        user: (decoded.args.user as string).toLowerCase(),
+        relayer: (decoded.args.relayer as string).toLowerCase(),
+      })
+    }
+    if (logs.length < MAX_EVENTS) break
+    offset += MAX_EVENTS
+  }
+
+  // Build latest preference per user (ascending order → last write wins)
+  const latestPref = new Map<string, string>()
+  for (const e of allEvents) {
+    latestPref.set(e.user, e.relayer)
+  }
+
+  const target = relayerAddress.toLowerCase()
+  let count = 0
+  for (const relayer of latestPref.values()) {
+    if (relayer === target) count++
+  }
+  return count
+}
+
 // ── Full summary fetch ──────────────────────────────────────
 
 export async function fetchSummary(
@@ -349,6 +454,7 @@ export async function fetchSummary(
 
   const best = await thor.blocks.getBestBlockCompressed()
   const latestBlock = best?.number ?? 0
+  const preferredUsersCount = await getPreferredRelayerUserCount(thor, rrp, relayerAddress)
 
   const [
     roundSnapshot,
@@ -422,6 +528,7 @@ export async function fetchSummary(
     relayerAddress,
     isRegistered: isReg,
     registeredRelayers,
+    preferredUsersCount,
     currentRoundId,
     roundSnapshot,
     roundDeadline,

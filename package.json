@@ -1,6 +1,6 @@
 {
   "name": "@vechain/vebetterdao-relayer-node",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Standalone relayer node for VeBetterDAO auto-voting and reward claiming",
   "main": "dist/index.js",
   "license": "MIT",
@@ -23,13 +23,13 @@
   "dependencies": {
     "@vechain/sdk-core": "2.0.7",
     "@vechain/sdk-network": "2.0.7",
-    "@vechain/vebetterdao-contracts": "^8.0.0",
+    "@vechain/vebetterdao-contracts": "8.4.0",
     "chalk": "^4.1.2"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.0.0"
   },
   "overrides": {
     "adm-zip@<=0.5.2": "0.5.2"
