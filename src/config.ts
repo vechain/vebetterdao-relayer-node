@@ -11,6 +11,8 @@ export const TESTNET_NODES = [
   "https://testnet.vechain.org",
 ]
 
+export const SOLO_DEFAULT_URL = "http://localhost:8669"
+
 export const MAINNET: NetworkConfig = {
   name: "mainnet",
   nodeUrl: MAINNET_NODES[0],
@@ -29,11 +31,30 @@ export const TESTNET_STAGING: NetworkConfig = {
   xAllocationPoolAddress: "0x6f7b4bc19b4dc99005b473b9c45ce2815bbe7533",
 }
 
+function getSoloConfig(): NetworkConfig {
+  const required = (key: string): string => {
+    const val = process.env[key]?.trim()
+    if (!val) throw new Error(`Solo network requires ${key} env var`)
+    return val
+  }
+  return {
+    name: "solo",
+    nodeUrl: process.env.NODE_URL?.trim() || SOLO_DEFAULT_URL,
+    xAllocationVotingAddress: required("X_ALLOCATION_VOTING_ADDRESS"),
+    voterRewardsAddress: required("VOTER_REWARDS_ADDRESS"),
+    relayerRewardsPoolAddress: required("RELAYER_REWARDS_POOL_ADDRESS"),
+    xAllocationPoolAddress: required("X_ALLOCATION_POOL_ADDRESS"),
+  }
+}
+
 export function getNetworkConfig(network: string, nodeUrlOverride?: string): NetworkConfig {
   let config: NetworkConfig
   switch (network) {
     case "mainnet":
       config = { ...MAINNET }
+      break
+    case "solo":
+      config = getSoloConfig()
       break
     case "testnet-staging":
     default:
@@ -48,6 +69,8 @@ export function getNodePool(network: string): string[] {
   switch (network) {
     case "mainnet":
       return [...MAINNET_NODES]
+    case "solo":
+      return [process.env.NODE_URL?.trim() || SOLO_DEFAULT_URL]
     case "testnet-staging":
     default:
       return [...TESTNET_NODES]

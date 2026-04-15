@@ -6,7 +6,7 @@
  * Env:
  *   MNEMONIC             BIP39 phrase (space-separated)
  *   RELAYER_PRIVATE_KEY   Hex private key (alternative to MNEMONIC)
- *   RELAYER_NETWORK       mainnet | testnet-staging (default: mainnet)
+ *   RELAYER_NETWORK       mainnet | testnet-staging | solo (default: mainnet)
  *   NODE_URL              Override Thor node URL
  *   BATCH_SIZE            Votes/claims per batch (default: 50)
  *   DRY_RUN               1/true to simulate only
