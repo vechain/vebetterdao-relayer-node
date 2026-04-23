@@ -50,7 +50,7 @@ interface BatchOutcome {
   txIds: string[]
 }
 
-async function processBatch(
+export async function processBatch(
   thor: ThorClient,
   users: string[],
   clauseBuilder: (user: string) => Clause,

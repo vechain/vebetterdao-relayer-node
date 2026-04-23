@@ -59,11 +59,11 @@ interface RoundStatus {
  * Voting done when completedWeighted >= totalWeighted * 3/4.
  */
 function getCurrentRoundStatus(s: RelayerSummary): RoundStatus {
-  if (s.autoVotingUsers === 0) {
+  if (s.autoVotingUsers === 0 && s.citizenUsers === 0) {
     return {
       label: "N/A",
       render: chalk.gray("N/A"),
-      hint: "No auto-voting users registered for this round.",
+      hint: "No auto-voting users or citizens registered for this round.",
     }
   }
   if (!s.isRoundActive) {
@@ -176,6 +176,12 @@ export function renderSummary(s: RelayerSummary): string {
   out.push("  " + chalk.italic.dim("  " + currentStatus.hint))
   out.push("")
   out.push("  " + pad(dimLabel("Auto-voters") + " " + chalk.white.bold(s.autoVotingUsers.toString()), dimLabel("Relayers") + " " + chalk.white.bold(s.registeredRelayers.length.toString())))
+  out.push("  " + pad(
+    dimLabel("Citizens") + "    " + chalk.white.bold(s.citizenUsers.toString()),
+    s.activeProposals > 0
+      ? dimLabel("Proposals") + " " + chalk.white.bold(s.activeProposals.toString())
+      : "",
+  ))
   out.push("  " + pad(dimLabel("Voters") + "      " + chalk.white(s.totalVoters.toString()), ""))
   out.push("  " + pad(dimLabel("Snapshot") + "    " + chalk.white(s.roundSnapshot.toString()), dimLabel("Deadline") + " " + chalk.white(s.roundDeadline.toString())))
 
@@ -285,10 +291,18 @@ export function renderSummary(s: RelayerSummary): string {
   return out.join("\n")
 }
 
-export function logSectionHeader(phase: "vote" | "claim", roundId: number): string {
-  const icon = phase === "vote" ? "🗳" : "💰"
-  const label = phase === "vote" ? "Cast Vote" : "Claim Rewards"
-  const text = ` ${icon}  ${label} · Round #${roundId} `
+type SectionPhase = "vote" | "claim" | "citizen-vote" | "citizen-governance" | "citizen-claim"
+
+export function logSectionHeader(phase: SectionPhase, roundId: number): string {
+  const icons: Record<SectionPhase, string> = {
+    "vote": "🗳", "claim": "💰",
+    "citizen-vote": "🏛", "citizen-governance": "⚖", "citizen-claim": "💰",
+  }
+  const labels: Record<SectionPhase, string> = {
+    "vote": "Cast Vote", "claim": "Claim Rewards",
+    "citizen-vote": "Citizen Allocation", "citizen-governance": "Citizen Governance", "citizen-claim": "Citizen Claims",
+  }
+  const text = ` ${icons[phase]}  ${labels[phase]} · Round #${roundId} `
   const lineLen = 60 - text.length
   const left = Math.floor(lineLen / 2)
   const right = lineLen - left
@@ -297,7 +311,14 @@ export function logSectionHeader(phase: "vote" | "claim", roundId: number): stri
 
 export function renderCycleResult(r: CycleResult): string[] {
   const lines: string[] = []
-  const tag = r.phase === "vote" ? chalk.cyan("Vote") : chalk.magenta("Claim")
+  const tagMap: Record<string, string> = {
+    "vote": chalk.cyan("Vote"),
+    "claim": chalk.magenta("Claim"),
+    "citizen-vote": chalk.cyan("Citizen Vote"),
+    "citizen-governance": chalk.cyan("Citizen Gov"),
+    "citizen-claim": chalk.magenta("Citizen Claim"),
+  }
+  const tag = tagMap[r.phase] ?? chalk.white(r.phase)
   const dryTag = r.dryRun ? chalk.yellow(" (DRY RUN)") : ""
 
   if (r.totalUsers === 0) {

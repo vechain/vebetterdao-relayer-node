@@ -7,6 +7,7 @@ import {
   RelayerRewardsPool__factory,
 } from "@vechain/vebetterdao-contracts/typechain-types"
 import { NetworkConfig, RelayerSummary } from "./types"
+import { getDelegatedCitizens, getActiveProposals } from "./citizen-contracts"
 
 const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
 const rrpAbi = ABIContract.ofAbi(RelayerRewardsPool__factory.abi)
@@ -456,6 +457,18 @@ export async function fetchSummary(
   const latestBlock = best?.number ?? 0
   const preferredUsersCount = await getPreferredRelayerUserCount(thor, rrp, relayerAddress)
 
+  // Citizen / navigator data (graceful fallback if contracts not deployed)
+  let citizenUsers = 0
+  let activeProposalCount = 0
+  try {
+    const citizenMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, latestBlock)
+    citizenUsers = citizenMap.size
+  } catch { /* NavigatorRegistry not deployed */ }
+  try {
+    const proposals = await getActiveProposals(thor, config.b3trGovernorAddress)
+    activeProposalCount = proposals.length
+  } catch { /* B3TRGovernor not deployed or no active proposals */ }
+
   const [
     roundSnapshot,
     roundDeadline,
@@ -535,6 +548,8 @@ export async function fetchSummary(
     isRoundActive: active,
     latestBlock,
     autoVotingUsers,
+    citizenUsers,
+    activeProposals: activeProposalCount,
     totalVoters,
     totalVotes,
     voteWeight,

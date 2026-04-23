@@ -24,6 +24,11 @@ import chalk from "chalk"
 import { getNetworkConfig, getNodePool } from "./config"
 import { fetchSummary } from "./contracts"
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
+import {
+  runCitizenAllocationVoteCycle,
+  runCitizenGovernanceVoteCycle,
+  runCitizenClaimRewardCycle,
+} from "./citizen-relayer"
 import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
 
 const SECRETS_DIR = "/run/secrets"
@@ -169,6 +174,20 @@ async function main() {
           logRaw(logSectionHeader("vote", summary.currentRoundId))
           const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
           renderCycleResult(voteResult).forEach(log)
+
+          // Citizen allocation votes
+          if (summary.citizenUsers > 0) {
+            logRaw("")
+            logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
+            const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+            renderCycleResult(citizenVoteResult).forEach(log)
+
+            // Citizen governance votes
+            logRaw("")
+            logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
+            const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+            for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+          }
         } else {
           log(chalk.dim("Round not active, skipping cast-vote"))
         }
@@ -177,6 +196,12 @@ async function main() {
         logRaw(logSectionHeader("claim", summary.previousRoundId))
         const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
         renderCycleResult(claimResult).forEach(log)
+
+        // Citizen claims
+        logRaw("")
+        logRaw(logSectionHeader("citizen-claim", summary.previousRoundId))
+        const citizenClaimResult = await runCitizenClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+        renderCycleResult(citizenClaimResult).forEach(log)
 
         // Render once after all work is done
         const updated = await fetchSummary(thor, config, walletAddress)

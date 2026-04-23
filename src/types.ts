@@ -5,6 +5,8 @@ export interface NetworkConfig {
   voterRewardsAddress: string
   relayerRewardsPoolAddress: string
   xAllocationPoolAddress: string
+  b3trGovernorAddress: string
+  navigatorRegistryAddress: string
 }
 
 export interface RelayerSummary {
@@ -22,6 +24,8 @@ export interface RelayerSummary {
   latestBlock: number
 
   autoVotingUsers: number
+  citizenUsers: number
+  activeProposals: number
   totalVoters: number
   totalVotes: bigint
 
@@ -56,7 +60,7 @@ export interface RelayerSummary {
 }
 
 export interface CycleResult {
-  phase: "vote" | "claim"
+  phase: "vote" | "claim" | "citizen-vote" | "citizen-governance" | "citizen-claim"
   roundId: number
   totalUsers: number
   successful: number
