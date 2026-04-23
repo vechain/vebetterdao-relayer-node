@@ -16,7 +16,8 @@ const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 const CALL_RETRIES = 3
 const CALL_RETRY_MS = 500
 
-async function call(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
+/** Execute a read-only contract call with retry on transient failures (not on reverts). */
+async function executeContractRead(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
   for (let attempt = 1; attempt <= CALL_RETRIES; attempt++) {
     try {
       const res = await thor.contracts.executeCall(address, abi.getFunction(method), args)
@@ -37,136 +38,136 @@ async function call(thor: ThorClient, address: string, abi: any, method: string,
 // ── XAllocationVoting reads ─────────────────────────────────
 
 export async function getCurrentRoundId(thor: ThorClient, addr: string): Promise<number> {
-  const r = await call(thor, addr, xavAbi, "currentRoundId")
+  const r = await executeContractRead(thor, addr, xavAbi, "currentRoundId")
   return Number(r[0])
 }
 
 export async function getRoundSnapshot(thor: ThorClient, addr: string, roundId: number): Promise<number> {
-  const r = await call(thor, addr, xavAbi, "roundSnapshot", [roundId])
+  const r = await executeContractRead(thor, addr, xavAbi, "roundSnapshot", [roundId])
   return Number(r[0])
 }
 
 export async function getRoundDeadline(thor: ThorClient, addr: string, roundId: number): Promise<number> {
-  const r = await call(thor, addr, xavAbi, "roundDeadline", [roundId])
+  const r = await executeContractRead(thor, addr, xavAbi, "roundDeadline", [roundId])
   return Number(r[0])
 }
 
 export async function isRoundActive(thor: ThorClient, addr: string, roundId: number): Promise<boolean> {
-  const r = await call(thor, addr, xavAbi, "isActive", [roundId])
+  const r = await executeContractRead(thor, addr, xavAbi, "isActive", [roundId])
   return Boolean(r[0])
 }
 
 export async function getTotalAutoVotingUsersAtRoundStart(thor: ThorClient, addr: string): Promise<number> {
-  const r = await call(thor, addr, xavAbi, "getTotalAutoVotingUsersAtRoundStart")
+  const r = await executeContractRead(thor, addr, xavAbi, "getTotalAutoVotingUsersAtRoundStart")
   return Number(r[0])
 }
 
 export async function getTotalVoters(thor: ThorClient, addr: string, roundId: number): Promise<number> {
-  const r = await call(thor, addr, xavAbi, "totalVoters", [roundId])
+  const r = await executeContractRead(thor, addr, xavAbi, "totalVoters", [roundId])
   return Number(r[0])
 }
 
 export async function getTotalVotes(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, xavAbi, "totalVotes", [roundId])
+  const r = await executeContractRead(thor, addr, xavAbi, "totalVotes", [roundId])
   return BigInt(r[0])
 }
 
 export async function hasVoted(thor: ThorClient, addr: string, roundId: number, user: string): Promise<boolean> {
-  const r = await call(thor, addr, xavAbi, "hasVoted", [roundId, user])
+  const r = await executeContractRead(thor, addr, xavAbi, "hasVoted", [roundId, user])
   return Boolean(r[0])
 }
 
 // ── RelayerRewardsPool reads ────────────────────────────────
 
 export async function getRegisteredRelayers(thor: ThorClient, addr: string): Promise<string[]> {
-  const r = await call(thor, addr, rrpAbi, "getRegisteredRelayers")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getRegisteredRelayers")
   return r[0] as string[]
 }
 
 export async function isRegisteredRelayer(thor: ThorClient, addr: string, relayer: string): Promise<boolean> {
-  const r = await call(thor, addr, rrpAbi, "isRegisteredRelayer", [relayer])
+  const r = await executeContractRead(thor, addr, rrpAbi, "isRegisteredRelayer", [relayer])
   return Boolean(r[0])
 }
 
 export async function getTotalRewards(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getTotalRewards", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "getTotalRewards", [roundId])
   return BigInt(r[0])
 }
 
 export async function getClaimableRewards(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "claimableRewards", [relayer, roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "claimableRewards", [relayer, roundId])
   return BigInt(r[0])
 }
 
 export async function isRewardClaimable(thor: ThorClient, addr: string, roundId: number): Promise<boolean> {
-  const r = await call(thor, addr, rrpAbi, "isRewardClaimable", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "isRewardClaimable", [roundId])
   return Boolean(r[0])
 }
 
 export async function getTotalActions(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "totalActions", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "totalActions", [roundId])
   return BigInt(r[0])
 }
 
 export async function getCompletedWeightedActions(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "completedWeightedActions", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "completedWeightedActions", [roundId])
   return BigInt(r[0])
 }
 
 export async function getTotalWeightedActions(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "totalWeightedActions", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "totalWeightedActions", [roundId])
   return BigInt(r[0])
 }
 
 export async function getMissedAutoVotingUsersCount(thor: ThorClient, addr: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getMissedAutoVotingUsersCount", [roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "getMissedAutoVotingUsersCount", [roundId])
   return BigInt(r[0])
 }
 
 export async function getVoteWeight(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getVoteWeight")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getVoteWeight")
   return BigInt(r[0])
 }
 
 export async function getClaimWeight(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getClaimWeight")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getClaimWeight")
   return BigInt(r[0])
 }
 
 export async function getRelayerFeePercentage(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getRelayerFeePercentage")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getRelayerFeePercentage")
   return BigInt(r[0])
 }
 
 export async function getRelayerFeeDenominator(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getRelayerFeeDenominator")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getRelayerFeeDenominator")
   return BigInt(r[0])
 }
 
 export async function getFeeCap(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getFeeCap")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getFeeCap")
   return BigInt(r[0])
 }
 
 export async function getEarlyAccessBlocks(thor: ThorClient, addr: string): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "getEarlyAccessBlocks")
+  const r = await executeContractRead(thor, addr, rrpAbi, "getEarlyAccessBlocks")
   return BigInt(r[0])
 }
 
 export async function getRelayerActions(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "totalRelayerActions", [relayer, roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "totalRelayerActions", [relayer, roundId])
   return BigInt(r[0])
 }
 
 export async function getRelayerWeightedActions(thor: ThorClient, addr: string, relayer: string, roundId: number): Promise<bigint> {
-  const r = await call(thor, addr, rrpAbi, "totalRelayerWeightedActions", [relayer, roundId])
+  const r = await executeContractRead(thor, addr, rrpAbi, "totalRelayerWeightedActions", [relayer, roundId])
   return BigInt(r[0])
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 export async function getPreferredRelayer(thor: ThorClient, addr: string, user: string): Promise<string | undefined> {
-  const r = await call(thor, addr, rrpAbi, "getPreferredRelayer", [user])
+  const r = await executeContractRead(thor, addr, rrpAbi, "getPreferredRelayer", [user])
   const relayer = r[0] as string
   if (!relayer || relayer.toLowerCase() === ZERO_ADDRESS) return undefined
   return relayer.toLowerCase()
@@ -231,6 +232,8 @@ interface AutoVotingCacheData {
   users: Record<string, boolean>
 }
 
+// Intentional process-lifetime cache (single-instance CLI, not a server).
+// Accumulates AutoVotingToggled events across cycles; only scans the delta.
 const autoVotingCache = {
   userState: new Map<string, boolean>(),
   lastBlock: -1,
@@ -460,14 +463,27 @@ export async function fetchSummary(
   // Citizen / navigator data (graceful fallback if contracts not deployed)
   let citizenUsers = 0
   let activeProposalCount = 0
-  try {
-    const citizenMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, latestBlock)
-    citizenUsers = citizenMap.size
-  } catch { /* NavigatorRegistry not deployed */ }
-  try {
-    const proposals = await getActiveProposals(thor, config.b3trGovernorAddress)
-    activeProposalCount = proposals.length
-  } catch { /* B3TRGovernor not deployed or no active proposals */ }
+  const navAddr = config.navigatorRegistryAddress
+  const govAddr = config.b3trGovernorAddress
+  const ZERO = "0x0000000000000000000000000000000000000000"
+  if (navAddr && navAddr !== ZERO) {
+    try {
+      const citizenMap = await getDelegatedCitizens(thor, navAddr, latestBlock)
+      citizenUsers = citizenMap.size
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!msg.includes("reverted")) console.error(`Warning: citizen fetch failed: ${msg}`)
+    }
+  }
+  if (govAddr && govAddr !== ZERO) {
+    try {
+      const proposals = await getActiveProposals(thor, govAddr)
+      activeProposalCount = proposals.length
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!msg.includes("reverted")) console.error(`Warning: proposals fetch failed: ${msg}`)
+    }
+  }
 
   const [
     roundSnapshot,

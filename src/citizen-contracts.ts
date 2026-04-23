@@ -43,7 +43,8 @@ const CALL_RETRY_MS = 500
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 const MAX_EVENTS = 1000
 
-async function call(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
+/** Execute a read-only contract call with retry on transient failures (not on reverts). */
+async function executeContractRead(thor: ThorClient, address: string, abi: any, method: string, args: any[] = []): Promise<any[]> {
   for (let attempt = 1; attempt <= CALL_RETRIES; attempt++) {
     try {
       const res = await thor.contracts.executeCall(address, abi.getFunction(method), args)
@@ -64,18 +65,18 @@ async function call(thor: ThorClient, address: string, abi: any, method: string,
 // ── B3TRGovernor reads ──────────────────────────────────────
 
 export async function getActiveProposals(thor: ThorClient, addr: string): Promise<number[]> {
-  const r = await call(thor, addr, govAbi, "getActiveProposals")
+  const r = await executeContractRead(thor, addr, govAbi, "getActiveProposals")
   const arr = r[0] as any[]
   return arr.map((id: any) => Number(id))
 }
 
 export async function hasVotedOnProposal(thor: ThorClient, addr: string, proposalId: number, citizen: string): Promise<boolean> {
-  const r = await call(thor, addr, govAbi, "hasVoted", [proposalId, citizen])
+  const r = await executeContractRead(thor, addr, govAbi, "hasVoted", [proposalId, citizen])
   return Boolean(r[0])
 }
 
 export async function getProposalDeadline(thor: ThorClient, addr: string, proposalId: number): Promise<number> {
-  const r = await call(thor, addr, govAbi, "proposalDeadline", [proposalId])
+  const r = await executeContractRead(thor, addr, govAbi, "proposalDeadline", [proposalId])
   return Number(r[0])
 }
 
@@ -87,7 +88,7 @@ export async function getNavigatorAtTimepoint(
   citizen: string,
   timepoint: number,
 ): Promise<string | undefined> {
-  const r = await call(thor, addr, navAbi, "getNavigatorAtTimepoint", [citizen, timepoint])
+  const r = await executeContractRead(thor, addr, navAbi, "getNavigatorAtTimepoint", [citizen, timepoint])
   const nav = r[0] as string
   if (!nav || nav.toLowerCase() === ZERO_ADDRESS) return undefined
   return nav.toLowerCase()
@@ -99,7 +100,7 @@ export async function hasSetPreferences(
   navigator: string,
   roundId: number,
 ): Promise<boolean> {
-  const r = await call(thor, addr, navAbi, "hasSetPreferences", [navigator, roundId])
+  const r = await executeContractRead(thor, addr, navAbi, "hasSetPreferences", [navigator, roundId])
   return Boolean(r[0])
 }
 
@@ -109,7 +110,7 @@ export async function hasSetDecision(
   navigator: string,
   proposalId: number,
 ): Promise<boolean> {
-  const r = await call(thor, addr, navAbi, "hasSetDecision", [navigator, proposalId])
+  const r = await executeContractRead(thor, addr, navAbi, "hasSetDecision", [navigator, proposalId])
   return Boolean(r[0])
 }
 
@@ -118,13 +119,58 @@ export async function isNavigatorDeactivated(
   addr: string,
   navigator: string,
 ): Promise<boolean> {
-  const r = await call(thor, addr, navAbi, "isDeactivated", [navigator])
+  const r = await executeContractRead(thor, addr, navAbi, "isDeactivated", [navigator])
   return Boolean(r[0])
 }
 
 /**
+ * Generic batch-simulate: splits keys into chunks, builds clauses, simulates,
+ * and decodes each result with the provided decoder.
+ */
+async function batchSimulate<T>(
+  thor: ThorClient,
+  contractAddr: string,
+  fn: ReturnType<typeof navAbi.getFunction>,
+  keys: string[],
+  encodeArgs: (key: string) => any[],
+  decode: (key: string, sim: { reverted: boolean; data: string }) => T | undefined,
+): Promise<Map<string, T>> {
+  const result = new Map<string, T>()
+  if (keys.length === 0) return result
+
+  const BATCH = 100
+  for (let i = 0; i < keys.length; i += BATCH) {
+    const chunk = keys.slice(i, i + BATCH)
+    const clauses = chunk.map((k) => ({
+      to: contractAddr,
+      value: "0x0",
+      data: fn.encodeData(encodeArgs(k)).toString(),
+    }))
+
+    const results = await thor.transactions.simulateTransaction(clauses)
+    for (let j = 0; j < results.length; j++) {
+      const val = decode(chunk[j], results[j])
+      if (val !== undefined) result.set(chunk[j].toLowerCase(), val)
+    }
+  }
+  return result
+}
+
+function decodeBool(fnAbi: ReturnType<typeof navAbi.getFunction>, label: string) {
+  return (key: string, sim: { reverted: boolean; data: string }): boolean => {
+    if (!sim || sim.reverted || !sim.data || sim.data === "0x") return false
+    try {
+      return Boolean(fnAbi.decodeOutputAsArray(Hex.of(sim.data))[0])
+    } catch (err) {
+      console.error(`Warning: decode ${label} for ${key.slice(0, 10)}...: ${err instanceof Error ? err.message : String(err)}`)
+      return false
+    }
+  }
+}
+
+/**
  * Batch-validate which citizens are delegated to a navigator at a given snapshot.
- * Returns a Map of citizen → navigator address (lowercase).
+ * Returns a Map of citizen -> navigator address (lowercase).
  */
 export async function getNavigatorsForCitizens(
   thor: ThorClient,
@@ -133,37 +179,21 @@ export async function getNavigatorsForCitizens(
   snapshot: number,
   log?: LogFn,
 ): Promise<Map<string, string>> {
-  const result = new Map<string, string>()
-  if (citizens.length === 0) return result
-
   const fn = navAbi.getFunction("getNavigatorAtTimepoint")
-  const BATCH = 100
-  for (let i = 0; i < citizens.length; i += BATCH) {
-    const chunk = citizens.slice(i, i + BATCH)
-    const clauses = chunk.map((citizen) => ({
-      to: navAddr,
-      value: "0x0",
-      data: fn.encodeData([citizen, snapshot]).toString(),
-    }))
-
-    const results = await thor.transactions.simulateTransaction(clauses)
-    for (let j = 0; j < results.length; j++) {
-      const sim = results[j]
-      if (!sim || sim.reverted || !sim.data || sim.data === "0x") continue
+  return batchSimulate(
+    thor, navAddr, fn, citizens,
+    (citizen) => [citizen, snapshot],
+    (key, sim) => {
+      if (!sim || sim.reverted || !sim.data || sim.data === "0x") return undefined
       try {
-        const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
-        const addr = (decoded[0] as string).toLowerCase()
-        if (addr !== ZERO_ADDRESS) {
-          result.set(chunk[j].toLowerCase(), addr)
-        }
+        const addr = (fn.decodeOutputAsArray(Hex.of(sim.data))[0] as string).toLowerCase()
+        return addr !== ZERO_ADDRESS ? addr : undefined
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        log?.(`Warning: decode getNavigatorAtTimepoint for ${chunk[j].slice(0, 10)}...: ${reason}`)
+        log?.(`Warning: decode getNavigatorAtTimepoint for ${key.slice(0, 10)}...: ${err instanceof Error ? err.message : String(err)}`)
+        return undefined
       }
-    }
-  }
-
-  return result
+    },
+  )
 }
 
 /**
@@ -175,35 +205,8 @@ export async function batchHasSetPreferences(
   navigators: string[],
   roundId: number,
 ): Promise<Map<string, boolean>> {
-  const result = new Map<string, boolean>()
-  if (navigators.length === 0) return result
-
   const fn = navAbi.getFunction("hasSetPreferences")
-  const BATCH = 100
-  for (let i = 0; i < navigators.length; i += BATCH) {
-    const chunk = navigators.slice(i, i + BATCH)
-    const clauses = chunk.map((nav) => ({
-      to: navAddr,
-      value: "0x0",
-      data: fn.encodeData([nav, roundId]).toString(),
-    }))
-
-    const results = await thor.transactions.simulateTransaction(clauses)
-    for (let j = 0; j < results.length; j++) {
-      const sim = results[j]
-      if (!sim || sim.reverted || !sim.data || sim.data === "0x") {
-        result.set(chunk[j].toLowerCase(), false)
-        continue
-      }
-      try {
-        const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
-        result.set(chunk[j].toLowerCase(), Boolean(decoded[0]))
-      } catch {
-        result.set(chunk[j].toLowerCase(), false)
-      }
-    }
-  }
-  return result
+  return batchSimulate(thor, navAddr, fn, navigators, (nav) => [nav, roundId], decodeBool(fn, "hasSetPreferences"))
 }
 
 /**
@@ -215,35 +218,8 @@ export async function batchHasSetDecision(
   navigators: string[],
   proposalId: number,
 ): Promise<Map<string, boolean>> {
-  const result = new Map<string, boolean>()
-  if (navigators.length === 0) return result
-
   const fn = navAbi.getFunction("hasSetDecision")
-  const BATCH = 100
-  for (let i = 0; i < navigators.length; i += BATCH) {
-    const chunk = navigators.slice(i, i + BATCH)
-    const clauses = chunk.map((nav) => ({
-      to: navAddr,
-      value: "0x0",
-      data: fn.encodeData([nav, proposalId]).toString(),
-    }))
-
-    const results = await thor.transactions.simulateTransaction(clauses)
-    for (let j = 0; j < results.length; j++) {
-      const sim = results[j]
-      if (!sim || sim.reverted || !sim.data || sim.data === "0x") {
-        result.set(chunk[j].toLowerCase(), false)
-        continue
-      }
-      try {
-        const decoded = fn.decodeOutputAsArray(Hex.of(sim.data))
-        result.set(chunk[j].toLowerCase(), Boolean(decoded[0]))
-      } catch {
-        result.set(chunk[j].toLowerCase(), false)
-      }
-    }
-  }
-  return result
+  return batchSimulate(thor, navAddr, fn, navigators, (nav) => [nav, proposalId], decodeBool(fn, "hasSetDecision"))
 }
 
 // ── Skip event scanners ─────────────────────────────────────
@@ -338,6 +314,10 @@ interface CitizenCacheData {
   delegations: Record<string, string>
 }
 
+// Intentional process-lifetime cache: this relayer is a single-instance CLI
+// process, not a multi-tenant server. The cache accumulates delegation events
+// across cycles so we only scan the delta since the last processed block.
+// eslint-disable-next-line @typescript-eslint/no-namespace
 const citizenCache = {
   delegations: new Map<string, string>(),
   lastBlock: -1,
@@ -357,8 +337,9 @@ function loadCitizenCacheFromDisk(): void {
       }
       citizenCache.lastBlock = data.lastBlock
     }
-  } catch {
-    // No cache file — start fresh
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!msg.includes("ENOENT")) console.error(`Warning: citizen cache load failed: ${msg}`)
   }
 }
 
@@ -370,8 +351,8 @@ function saveCitizenCacheToDisk(): void {
   try {
     const fs = require("fs") as typeof import("fs")
     fs.writeFileSync(getCitizenCachePath(), JSON.stringify(data), "utf-8")
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.error(`Warning: citizen cache save failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -380,6 +361,41 @@ function saveCitizenCacheToDisk(): void {
  * Scans DelegationCreated, DelegationRemoved, ExitAnnounced, NavigatorDeactivatedEvent.
  * Uses disk cache for incremental scanning.
  */
+async function scanEventLogs(
+  thor: ThorClient,
+  address: string,
+  eventAbi: any,
+  fromBlock: number,
+  toBlock: number,
+  onLog: (decoded: any) => void,
+): Promise<void> {
+  const topics = eventAbi.encodeFilterTopicsNoNull({})
+  let offset = 0
+  while (true) {
+    const logs = await thor.logs.filterEventLogs({
+      range: { unit: "block" as const, from: fromBlock, to: toBlock },
+      options: { offset, limit: MAX_EVENTS },
+      order: "asc",
+      criteriaSet: [{ criteria: { address, topic0: topics[0] }, eventAbi }],
+    })
+    for (const log of logs) {
+      onLog(eventAbi.decodeEventLog({
+        topics: log.topics.map((t: string) => Hex.of(t)),
+        data: Hex.of(log.data),
+      }))
+    }
+    if (logs.length < MAX_EVENTS) break
+    offset += MAX_EVENTS
+  }
+}
+
+function removeCitizensOfNavigator(nav: string): void {
+  const lc = nav.toLowerCase()
+  for (const [citizen, citizenNav] of citizenCache.delegations) {
+    if (citizenNav === lc) citizenCache.delegations.delete(citizen)
+  }
+}
+
 export async function getDelegatedCitizens(
   thor: ThorClient,
   navigatorRegistryAddress: string,
@@ -393,111 +409,34 @@ export async function getDelegatedCitizens(
   }
 
   const fromBlock = citizenCache.lastBlock >= 0 ? citizenCache.lastBlock + 1 : 0
+  if (fromBlock > toBlock) return new Map(citizenCache.delegations)
 
-  if (fromBlock <= toBlock) {
-    // Scan delegation events
-    const delegationCreated = navAbi.getEvent("DelegationCreated") as any
-    const delegationRemoved = navAbi.getEvent("DelegationRemoved") as any
-    const exitAnnounced = navAbi.getEvent("ExitAnnounced") as any
-    const navigatorDeactivated = navAbi.getEvent("NavigatorDeactivatedEvent") as any
+  const addr = navigatorRegistryAddress
+  const delegationCreated = navAbi.getEvent("DelegationCreated") as any
+  const delegationRemoved = navAbi.getEvent("DelegationRemoved") as any
+  const exitAnnounced = navAbi.getEvent("ExitAnnounced") as any
+  const navigatorDeactivated = navAbi.getEvent("NavigatorDeactivatedEvent") as any
 
-    const createdTopics = delegationCreated.encodeFilterTopicsNoNull({})
-    const removedTopics = delegationRemoved.encodeFilterTopicsNoNull({})
-    const exitTopics = exitAnnounced.encodeFilterTopicsNoNull({})
-    const deactivatedTopics = navigatorDeactivated.encodeFilterTopicsNoNull({})
+  await scanEventLogs(thor, addr, delegationCreated, fromBlock, toBlock, (d) => {
+    citizenCache.delegations.set(
+      (d.args.citizen as string).toLowerCase(),
+      (d.args.navigator as string).toLowerCase(),
+    )
+  })
 
-    // Scan DelegationCreated
-    let offset = 0
-    while (true) {
-      const logs = await thor.logs.filterEventLogs({
-        range: { unit: "block" as const, from: fromBlock, to: toBlock },
-        options: { offset, limit: MAX_EVENTS },
-        order: "asc",
-        criteriaSet: [{ criteria: { address: navigatorRegistryAddress, topic0: createdTopics[0] }, eventAbi: delegationCreated }],
-      })
-      for (const log of logs) {
-        const decoded = delegationCreated.decodeEventLog({
-          topics: log.topics.map((t: string) => Hex.of(t)),
-          data: Hex.of(log.data),
-        })
-        citizenCache.delegations.set(
-          (decoded.args.citizen as string).toLowerCase(),
-          (decoded.args.navigator as string).toLowerCase(),
-        )
-      }
-      if (logs.length < MAX_EVENTS) break
-      offset += MAX_EVENTS
-    }
+  await scanEventLogs(thor, addr, delegationRemoved, fromBlock, toBlock, (d) => {
+    citizenCache.delegations.delete((d.args.citizen as string).toLowerCase())
+  })
 
-    // Scan DelegationRemoved
-    offset = 0
-    while (true) {
-      const logs = await thor.logs.filterEventLogs({
-        range: { unit: "block" as const, from: fromBlock, to: toBlock },
-        options: { offset, limit: MAX_EVENTS },
-        order: "asc",
-        criteriaSet: [{ criteria: { address: navigatorRegistryAddress, topic0: removedTopics[0] }, eventAbi: delegationRemoved }],
-      })
-      for (const log of logs) {
-        const decoded = delegationRemoved.decodeEventLog({
-          topics: log.topics.map((t: string) => Hex.of(t)),
-          data: Hex.of(log.data),
-        })
-        citizenCache.delegations.delete((decoded.args.citizen as string).toLowerCase())
-      }
-      if (logs.length < MAX_EVENTS) break
-      offset += MAX_EVENTS
-    }
+  await scanEventLogs(thor, addr, exitAnnounced, fromBlock, toBlock, (d) => {
+    removeCitizensOfNavigator(d.args.navigator as string)
+  })
 
-    // Scan ExitAnnounced — bulk-remove all citizens under this navigator
-    offset = 0
-    while (true) {
-      const logs = await thor.logs.filterEventLogs({
-        range: { unit: "block" as const, from: fromBlock, to: toBlock },
-        options: { offset, limit: MAX_EVENTS },
-        order: "asc",
-        criteriaSet: [{ criteria: { address: navigatorRegistryAddress, topic0: exitTopics[0] }, eventAbi: exitAnnounced }],
-      })
-      for (const log of logs) {
-        const decoded = exitAnnounced.decodeEventLog({
-          topics: log.topics.map((t: string) => Hex.of(t)),
-          data: Hex.of(log.data),
-        })
-        const nav = (decoded.args.navigator as string).toLowerCase()
-        for (const [citizen, citizenNav] of citizenCache.delegations) {
-          if (citizenNav === nav) citizenCache.delegations.delete(citizen)
-        }
-      }
-      if (logs.length < MAX_EVENTS) break
-      offset += MAX_EVENTS
-    }
+  await scanEventLogs(thor, addr, navigatorDeactivated, fromBlock, toBlock, (d) => {
+    removeCitizensOfNavigator(d.args.navigator as string)
+  })
 
-    // Scan NavigatorDeactivatedEvent — bulk-remove all citizens under this navigator
-    offset = 0
-    while (true) {
-      const logs = await thor.logs.filterEventLogs({
-        range: { unit: "block" as const, from: fromBlock, to: toBlock },
-        options: { offset, limit: MAX_EVENTS },
-        order: "asc",
-        criteriaSet: [{ criteria: { address: navigatorRegistryAddress, topic0: deactivatedTopics[0] }, eventAbi: navigatorDeactivated }],
-      })
-      for (const log of logs) {
-        const decoded = navigatorDeactivated.decodeEventLog({
-          topics: log.topics.map((t: string) => Hex.of(t)),
-          data: Hex.of(log.data),
-        })
-        const nav = (decoded.args.navigator as string).toLowerCase()
-        for (const [citizen, citizenNav] of citizenCache.delegations) {
-          if (citizenNav === nav) citizenCache.delegations.delete(citizen)
-        }
-      }
-      if (logs.length < MAX_EVENTS) break
-      offset += MAX_EVENTS
-    }
-
-    citizenCache.lastBlock = toBlock
-    saveCitizenCacheToDisk()
-  }
-
+  citizenCache.lastBlock = toBlock
+  saveCitizenCacheToDisk()
   return new Map(citizenCache.delegations)
 }

@@ -29,6 +29,18 @@ import { processBatch } from "./relayer"
 
 const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 
+async function hasVotedOnAnyProposal(
+  thor: ThorClient,
+  governorAddr: string,
+  citizen: string,
+  proposalIds: number[],
+): Promise<boolean> {
+  for (const pid of proposalIds) {
+    if (await hasVotedOnProposal(thor, governorAddr, pid, citizen)) return true
+  }
+  return false
+}
+
 const SKIP_WINDOW_BLOCKS = 720
 
 function delay(ms: number) {
@@ -365,7 +377,10 @@ export async function runCitizenClaimRewardCycle(
   let previousProposals: number[] = []
   try {
     previousProposals = await getActiveProposals(thor, config.b3trGovernorAddress)
-  } catch { /* governor not deployed */ }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!msg.includes("reverted")) console.error(`Warning: fetch proposals for claim check failed: ${msg}`)
+  }
 
   log("Checking citizen claim status...")
   const unclaimed: string[] = []
@@ -382,14 +397,8 @@ export async function runCitizenClaimRewardCycle(
       chunk.map((c) => hasVoted(thor, config.xAllocationVotingAddress, previousRoundId, c)),
     )
 
-    // Check governance hasVoted (any proposal counts)
     const governanceChecks = await Promise.all(
-      chunk.map(async (c) => {
-        for (const pid of previousProposals) {
-          if (await hasVotedOnProposal(thor, config.b3trGovernorAddress, pid, c)) return true
-        }
-        return false
-      }),
+      chunk.map((c) => hasVotedOnAnyProposal(thor, config.b3trGovernorAddress, c, previousProposals)),
     )
 
     for (let j = 0; j < chunk.length; j++) {
