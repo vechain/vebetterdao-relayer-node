@@ -361,15 +361,23 @@ function saveCitizenCacheToDisk(): void {
  * Scans DelegationCreated, DelegationRemoved, ExitAnnounced, NavigatorDeactivatedEvent.
  * Uses disk cache for incremental scanning.
  */
-async function scanEventLogs(
+interface TaggedEvent {
+  type: 'created' | 'removed' | 'exit' | 'deactivated'
+  blockNumber: number
+  clauseIndex: number
+  args: any
+}
+
+async function collectEventLogs(
   thor: ThorClient,
   address: string,
   eventAbi: any,
   fromBlock: number,
   toBlock: number,
-  onLog: (decoded: any) => void,
-): Promise<void> {
+  type: TaggedEvent['type'],
+): Promise<TaggedEvent[]> {
   const topics = eventAbi.encodeFilterTopicsNoNull({})
+  const events: TaggedEvent[] = []
   let offset = 0
   while (true) {
     const logs = await thor.logs.filterEventLogs({
@@ -379,14 +387,21 @@ async function scanEventLogs(
       criteriaSet: [{ criteria: { address, topic0: topics[0] }, eventAbi }],
     })
     for (const log of logs) {
-      onLog(eventAbi.decodeEventLog({
+      const decoded = eventAbi.decodeEventLog({
         topics: log.topics.map((t: string) => Hex.of(t)),
         data: Hex.of(log.data),
-      }))
+      })
+      events.push({
+        type,
+        blockNumber: (log as any).meta.blockNumber,
+        clauseIndex: (log as any).meta.clauseIndex,
+        args: decoded.args,
+      })
     }
     if (logs.length < MAX_EVENTS) break
     offset += MAX_EVENTS
   }
+  return events
 }
 
 function removeCitizensOfNavigator(nav: string): void {
@@ -417,24 +432,47 @@ export async function getDelegatedCitizens(
   const exitAnnounced = navAbi.getEvent("ExitAnnounced") as any
   const navigatorDeactivated = navAbi.getEvent("NavigatorDeactivatedEvent") as any
 
-  await scanEventLogs(thor, addr, delegationCreated, fromBlock, toBlock, (d) => {
-    citizenCache.delegations.set(
-      (d.args.citizen as string).toLowerCase(),
-      (d.args.navigator as string).toLowerCase(),
-    )
-  })
+  // Fetch all event types then process in chronological order.
+  // Previously events were processed by type (all Creates, then all Removes),
+  // which broke when a citizen switched navigators: the Create set the new nav,
+  // then the Remove deleted the citizen entirely.
+  const [created, removed, exits, deactivated] = await Promise.all([
+    collectEventLogs(thor, addr, delegationCreated, fromBlock, toBlock, 'created'),
+    collectEventLogs(thor, addr, delegationRemoved, fromBlock, toBlock, 'removed'),
+    collectEventLogs(thor, addr, exitAnnounced, fromBlock, toBlock, 'exit'),
+    collectEventLogs(thor, addr, navigatorDeactivated, fromBlock, toBlock, 'deactivated'),
+  ])
 
-  await scanEventLogs(thor, addr, delegationRemoved, fromBlock, toBlock, (d) => {
-    citizenCache.delegations.delete((d.args.citizen as string).toLowerCase())
-  })
+  const allEvents = [...created, ...removed, ...exits, ...deactivated]
 
-  await scanEventLogs(thor, addr, exitAnnounced, fromBlock, toBlock, (d) => {
-    removeCitizensOfNavigator(d.args.navigator as string)
-  })
+  // Sort by block number, then clause index. For same block+clause (e.g. within
+  // one transaction), process removals before creations to match EVM emit order.
+  const TYPE_ORDER: Record<TaggedEvent['type'], number> = { deactivated: 0, exit: 1, removed: 2, created: 3 }
+  allEvents.sort((a, b) =>
+    a.blockNumber - b.blockNumber ||
+    a.clauseIndex - b.clauseIndex ||
+    TYPE_ORDER[a.type] - TYPE_ORDER[b.type],
+  )
 
-  await scanEventLogs(thor, addr, navigatorDeactivated, fromBlock, toBlock, (d) => {
-    removeCitizensOfNavigator(d.args.navigator as string)
-  })
+  for (const event of allEvents) {
+    switch (event.type) {
+      case 'created':
+        citizenCache.delegations.set(
+          (event.args.citizen as string).toLowerCase(),
+          (event.args.navigator as string).toLowerCase(),
+        )
+        break
+      case 'removed':
+        citizenCache.delegations.delete((event.args.citizen as string).toLowerCase())
+        break
+      case 'exit':
+        removeCitizensOfNavigator(event.args.navigator as string)
+        break
+      case 'deactivated':
+        removeCitizensOfNavigator(event.args.navigator as string)
+        break
+    }
+  }
 
   citizenCache.lastBlock = toBlock
   saveCitizenCacheToDisk()
