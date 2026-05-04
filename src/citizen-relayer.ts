@@ -23,7 +23,6 @@ import {
   getAlreadySkippedCitizensForProposal,
   getActiveProposals,
   hasVotedOnProposal,
-  getProposalDeadline,
   shortProposalId,
 } from "./citizen-contracts"
 import { processBatch } from "./relayer"
@@ -41,8 +40,6 @@ async function hasVotedOnAnyProposal(
   }
   return false
 }
-
-const SKIP_WINDOW_BLOCKS = 720
 
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
@@ -89,7 +86,6 @@ export async function runCitizenAllocationVoteCycle(
 
   const roundId = await getCurrentRoundId(thor, config.xAllocationVotingAddress)
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, roundId)
-  const deadline = await getRoundDeadline(thor, config.xAllocationVotingAddress, roundId)
 
   log(`Fetching delegated citizens (snapshot block ${snapshot})...`)
   const delegationMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, snapshot)
@@ -120,7 +116,6 @@ export async function runCitizenAllocationVoteCycle(
   // Pre-check preferences: group citizens by navigator, batch-check hasSetPreferences
   const uniqueNavigators = [...new Set(validatedMap.values())]
   const prefsMap = await batchHasSetPreferences(thor, config.navigatorRegistryAddress, uniqueNavigators, roundId)
-  const skipWindowReached = latestBlock + SKIP_WINDOW_BLOCKS >= deadline
 
   // Build preferred relayer map for early access filtering
   const citizenAddresses = [...validatedMap.keys()]
@@ -149,10 +144,11 @@ export async function runCitizenAllocationVoteCycle(
       if (checks[j]) { voted++; continue }
       if (skippedSet.has(citizen)) { skipped++; continue }
 
-      // Pre-check navigator preferences
+      // Skip citizens whose navigator hasn't set prefs yet — castNavigatorVote
+      // would revert and poison the batch simulation. Wait for the navigator.
       const nav = validatedMap.get(citizen)!
       const hasPrefs = prefsMap.get(nav) ?? false
-      if (!hasPrefs && !skipWindowReached) { waitingForPrefs++; continue }
+      if (!hasPrefs) { waitingForPrefs++; continue }
 
       // Early access: skip citizens who prefer a different relayer
       const pref = preferredMap.get(citizen)
@@ -246,9 +242,6 @@ export async function runCitizenGovernanceVoteCycle(
   for (const proposalId of proposals) {
     log(chalk.dim(`Proposal ${shortProposalId(proposalId)}:`))
 
-    const proposalDeadline = await getProposalDeadline(thor, config.b3trGovernorAddress, proposalId)
-    const govSkipWindowReached = latestBlock + SKIP_WINDOW_BLOCKS >= proposalDeadline
-
     // Check navigator decisions for this proposal
     const uniqueNavigators = [...new Set(validatedMap.values())]
     const decisionsMap = await batchHasSetDecision(thor, config.navigatorRegistryAddress, uniqueNavigators, proposalId)
@@ -275,9 +268,11 @@ export async function runCitizenGovernanceVoteCycle(
         if (checks[j]) { voted++; continue }
         if (govSkippedSet.has(citizen)) { skipped++; continue }
 
+        // Skip citizens whose navigator hasn't set a decision yet — castNavigatorVote
+        // would revert and poison the batch simulation. Wait for the navigator.
         const nav = validatedMap.get(citizen)!
         const hasDecision = decisionsMap.get(nav) ?? false
-        if (!hasDecision && !govSkipWindowReached) { waitingForDecision++; continue }
+        if (!hasDecision) { waitingForDecision++; continue }
 
         const pref = preferredMap.get(citizen)
         if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
