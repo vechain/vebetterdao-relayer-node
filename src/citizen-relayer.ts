@@ -24,6 +24,7 @@ import {
   getActiveProposals,
   hasVotedOnProposal,
   getProposalDeadline,
+  shortProposalId,
 } from "./citizen-contracts"
 import { processBatch } from "./relayer"
 
@@ -33,7 +34,7 @@ async function hasVotedOnAnyProposal(
   thor: ThorClient,
   governorAddr: string,
   citizen: string,
-  proposalIds: number[],
+  proposalIds: string[],
 ): Promise<boolean> {
   for (const pid of proposalIds) {
     if (await hasVotedOnProposal(thor, governorAddr, pid, citizen)) return true
@@ -57,7 +58,7 @@ function buildCitizenAllocationVoteClause(xavAddr: string, roundId: number, citi
   )
 }
 
-function buildCitizenGovernanceVoteClause(governorAddr: string, proposalId: number, citizen: string): Clause {
+function buildCitizenGovernanceVoteClause(governorAddr: string, proposalId: string, citizen: string): Clause {
   return Clause.callFunction(
     Address.of(governorAddr),
     govAbi.getFunction("castNavigatorVote"),
@@ -203,7 +204,7 @@ export async function runCitizenGovernanceVoteCycle(
 ): Promise<CycleResult[]> {
   const results: CycleResult[] = []
 
-  let proposals: number[]
+  let proposals: string[]
   try {
     proposals = await getActiveProposals(thor, config.b3trGovernorAddress)
   } catch {
@@ -243,7 +244,7 @@ export async function runCitizenGovernanceVoteCycle(
   const myAddress = walletAddress.toLowerCase()
 
   for (const proposalId of proposals) {
-    log(chalk.dim(`Proposal #${proposalId}:`))
+    log(chalk.dim(`Proposal ${shortProposalId(proposalId)}:`))
 
     const proposalDeadline = await getProposalDeadline(thor, config.b3trGovernorAddress, proposalId)
     const govSkipWindowReached = latestBlock + SKIP_WINDOW_BLOCKS >= proposalDeadline
@@ -297,7 +298,7 @@ export async function runCitizenGovernanceVoteCycle(
 
     if (unprocessed.length === 0) {
       results.push({
-        phase: "citizen-governance", roundId: proposalId, totalUsers: validatedMap.size,
+        phase: "citizen-governance", roundId, totalUsers: validatedMap.size,
         successful: 0, failed: [], transient: [], txIds: [], dryRun,
       })
       continue
@@ -308,7 +309,7 @@ export async function runCitizenGovernanceVoteCycle(
 
     results.push({
       phase: "citizen-governance",
-      roundId: proposalId,
+      roundId,
       totalUsers: validatedMap.size,
       successful: result.successful,
       failed: result.failed,
@@ -374,7 +375,7 @@ export async function runCitizenClaimRewardCycle(
   const myAddress = walletAddress.toLowerCase()
 
   // Check governance proposals for previous round (for hasVoted check)
-  let previousProposals: number[] = []
+  let previousProposals: string[] = []
   try {
     previousProposals = await getActiveProposals(thor, config.b3trGovernorAddress)
   } catch (err) {

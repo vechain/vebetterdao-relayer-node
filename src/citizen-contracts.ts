@@ -64,18 +64,29 @@ async function executeContractRead(thor: ThorClient, address: string, abi: any, 
 
 // ── B3TRGovernor reads ──────────────────────────────────────
 
-export async function getActiveProposals(thor: ThorClient, addr: string): Promise<number[]> {
-  const r = await executeContractRead(thor, addr, govAbi, "getActiveProposals")
-  const arr = r[0] as any[]
-  return arr.map((id: any) => Number(id))
+// Proposal IDs are uint256 hash-derived values; converting to JS Number loses
+// precision. We carry them as 0x-prefixed 32-byte hex strings (bytes32 form),
+// which the ABI encoder accepts directly for uint256 arguments via BigInt().
+function toBytes32Hex(v: any): string {
+  return "0x" + BigInt(v).toString(16).padStart(64, "0")
 }
 
-export async function hasVotedOnProposal(thor: ThorClient, addr: string, proposalId: number, citizen: string): Promise<boolean> {
+export function shortProposalId(id: string): string {
+  return id.slice(0, 6) + "…" + id.slice(-4)
+}
+
+export async function getActiveProposals(thor: ThorClient, addr: string): Promise<string[]> {
+  const r = await executeContractRead(thor, addr, govAbi, "getActiveProposals")
+  const arr = r[0] as any[]
+  return arr.map(toBytes32Hex)
+}
+
+export async function hasVotedOnProposal(thor: ThorClient, addr: string, proposalId: string, citizen: string): Promise<boolean> {
   const r = await executeContractRead(thor, addr, govAbi, "hasVoted", [proposalId, citizen])
   return Boolean(r[0])
 }
 
-export async function getProposalDeadline(thor: ThorClient, addr: string, proposalId: number): Promise<number> {
+export async function getProposalDeadline(thor: ThorClient, addr: string, proposalId: string): Promise<number> {
   const r = await executeContractRead(thor, addr, govAbi, "proposalDeadline", [proposalId])
   return Number(r[0])
 }
@@ -108,7 +119,7 @@ export async function hasSetDecision(
   thor: ThorClient,
   addr: string,
   navigator: string,
-  proposalId: number,
+  proposalId: string,
 ): Promise<boolean> {
   const r = await executeContractRead(thor, addr, navAbi, "hasSetDecision", [navigator, proposalId])
   return Boolean(r[0])
@@ -216,7 +227,7 @@ export async function batchHasSetDecision(
   thor: ThorClient,
   navAddr: string,
   navigators: string[],
-  proposalId: number,
+  proposalId: string,
 ): Promise<Map<string, boolean>> {
   const fn = navAbi.getFunction("hasSetDecision")
   return batchSimulate(thor, navAddr, fn, navigators, (nav) => [nav, proposalId], decodeBool(fn, "hasSetDecision"))
@@ -270,7 +281,7 @@ export async function getAlreadySkippedCitizensForRound(
 export async function getAlreadySkippedCitizensForProposal(
   thor: ThorClient,
   governorAddress: string,
-  proposalId: number,
+  proposalId: string,
   fromBlock: number,
   toBlock: number,
 ): Promise<Set<string>> {
@@ -291,7 +302,7 @@ export async function getAlreadySkippedCitizensForProposal(
         topics: log.topics.map((t: string) => Hex.of(t)),
         data: Hex.of(log.data),
       })
-      if (Number(decoded.args.proposalId) === proposalId) {
+      if (toBytes32Hex(decoded.args.proposalId) === proposalId) {
         skipped.add((decoded.args.citizen as string).toLowerCase())
       }
     }

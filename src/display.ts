@@ -331,8 +331,14 @@ export function renderCycleResult(r: CycleResult): string[] {
     : chalk.yellow(`${r.successful}/${r.totalUsers}`)
   lines.push(`${tag} ${ratio} successful${dryTag}`)
 
-  if (r.failed.length > 0)
+  if (r.failed.length > 0) {
     lines.push(chalk.red(`  ${r.failed.length} failed`) + chalk.gray(` (${r.failed.slice(0, 3).map((f) => shortAddr(f.user)).join(", ")}${r.failed.length > 3 ? "..." : ""})`))
+    const reasons = new Map<string, number>()
+    for (const f of r.failed) reasons.set(f.reason, (reasons.get(f.reason) ?? 0) + 1)
+    for (const [reason, count] of reasons) {
+      lines.push(chalk.gray(`    ↳ ${count}× `) + chalk.red(reason))
+    }
+  }
 
   if (r.transient.length > 0)
     lines.push(chalk.yellow(`  ${r.transient.length} transient failures`))
