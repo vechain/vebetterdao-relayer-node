@@ -8,6 +8,7 @@ const GOVERNOR_ABI = [
   { type: "function", name: "getActiveProposals", inputs: [], outputs: [{ type: "uint256[]" }], stateMutability: "view" },
   { type: "function", name: "hasVoted", inputs: [{ name: "proposalId", type: "uint256" }, { name: "account", type: "address" }], outputs: [{ type: "bool" }], stateMutability: "view" },
   { type: "function", name: "proposalDeadline", inputs: [{ name: "proposalId", type: "uint256" }], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "governanceSkipWindowBlocks", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
   { type: "function", name: "castNavigatorVote", inputs: [{ name: "proposalId", type: "uint256" }, { name: "citizen", type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "nonpayable" },
 ] as const
 
@@ -24,6 +25,7 @@ const NAVIGATOR_REGISTRY_ABI = [
 
 const XAV_NAVIGATOR_ABI = [
   { type: "function", name: "castNavigatorVote", inputs: [{ name: "citizen", type: "address" }, { name: "roundId", type: "uint256" }], outputs: [], stateMutability: "nonpayable" },
+  { type: "function", name: "citizenSkipWindowBlocks", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
   { type: "event", name: "NavigatorVoteSkipped", inputs: [{ name: "citizen", type: "address", indexed: true }, { name: "navigator", type: "address", indexed: true }, { name: "roundId", type: "uint256", indexed: true }] },
 ] as const
 
@@ -88,6 +90,16 @@ export async function hasVotedOnProposal(thor: ThorClient, addr: string, proposa
 
 export async function getProposalDeadline(thor: ThorClient, addr: string, proposalId: string): Promise<number> {
   const r = await executeContractRead(thor, addr, govAbi, "proposalDeadline", [proposalId])
+  return Number(r[0])
+}
+
+export async function getGovernanceSkipWindowBlocks(thor: ThorClient, governorAddr: string): Promise<number> {
+  const r = await executeContractRead(thor, governorAddr, govAbi, "governanceSkipWindowBlocks")
+  return Number(r[0])
+}
+
+export async function getCitizenSkipWindowBlocks(thor: ThorClient, xavAddr: string): Promise<number> {
+  const r = await executeContractRead(thor, xavAddr, xavNavAbi, "citizenSkipWindowBlocks")
   return Number(r[0])
 }
 

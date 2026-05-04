@@ -23,6 +23,9 @@ import {
   getAlreadySkippedCitizensForProposal,
   getActiveProposals,
   hasVotedOnProposal,
+  getProposalDeadline,
+  getGovernanceSkipWindowBlocks,
+  getCitizenSkipWindowBlocks,
   shortProposalId,
 } from "./citizen-contracts"
 import { processBatch } from "./relayer"
@@ -86,6 +89,7 @@ export async function runCitizenAllocationVoteCycle(
 
   const roundId = await getCurrentRoundId(thor, config.xAllocationVotingAddress)
   const snapshot = await getRoundSnapshot(thor, config.xAllocationVotingAddress, roundId)
+  const deadline = await getRoundDeadline(thor, config.xAllocationVotingAddress, roundId)
 
   log(`Fetching delegated citizens (snapshot block ${snapshot})...`)
   const delegationMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, snapshot)
@@ -117,6 +121,11 @@ export async function runCitizenAllocationVoteCycle(
   const uniqueNavigators = [...new Set(validatedMap.values())]
   const prefsMap = await batchHasSetPreferences(thor, config.navigatorRegistryAddress, uniqueNavigators, roundId)
 
+  // Past the skip window, castNavigatorVote stops reverting on missing-prefs
+  // citizens and instead emits NavigatorVoteSkipped, so we can include them.
+  const skipWindowBlocks = await getCitizenSkipWindowBlocks(thor, config.xAllocationVotingAddress)
+  const skipWindowReached = latestBlock + skipWindowBlocks >= deadline
+
   // Build preferred relayer map for early access filtering
   const citizenAddresses = [...validatedMap.keys()]
   const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
@@ -144,11 +153,13 @@ export async function runCitizenAllocationVoteCycle(
       if (checks[j]) { voted++; continue }
       if (skippedSet.has(citizen)) { skipped++; continue }
 
-      // Skip citizens whose navigator hasn't set prefs yet — castNavigatorVote
-      // would revert and poison the batch simulation. Wait for the navigator.
+      // Before the skip window: nav-without-prefs citizens cause castNavigatorVote
+      // to revert, poisoning the batch simulation — wait for the navigator.
+      // After the skip window: the contract emits NavigatorVoteSkipped instead
+      // of reverting, so we can include them in the batch.
       const nav = validatedMap.get(citizen)!
       const hasPrefs = prefsMap.get(nav) ?? false
-      if (!hasPrefs) { waitingForPrefs++; continue }
+      if (!hasPrefs && !skipWindowReached) { waitingForPrefs++; continue }
 
       // Early access: skip citizens who prefer a different relayer
       const pref = preferredMap.get(citizen)
@@ -239,8 +250,14 @@ export async function runCitizenGovernanceVoteCycle(
   const preferredMap = await getPreferredRelayersForUsers(thor, config.relayerRewardsPoolAddress, citizenAddresses, log)
   const myAddress = walletAddress.toLowerCase()
 
+  // Skip window threshold (per-proposal deadline computed below)
+  const govSkipWindowBlocks = await getGovernanceSkipWindowBlocks(thor, config.b3trGovernorAddress)
+
   for (const proposalId of proposals) {
     log(chalk.dim(`Proposal ${shortProposalId(proposalId)}:`))
+
+    const proposalDeadline = await getProposalDeadline(thor, config.b3trGovernorAddress, proposalId)
+    const govSkipWindowReached = latestBlock + govSkipWindowBlocks >= proposalDeadline
 
     // Check navigator decisions for this proposal
     const uniqueNavigators = [...new Set(validatedMap.values())]
@@ -268,11 +285,13 @@ export async function runCitizenGovernanceVoteCycle(
         if (checks[j]) { voted++; continue }
         if (govSkippedSet.has(citizen)) { skipped++; continue }
 
-        // Skip citizens whose navigator hasn't set a decision yet — castNavigatorVote
-        // would revert and poison the batch simulation. Wait for the navigator.
+        // Before the skip window: nav-without-decision citizens cause castNavigatorVote
+        // to revert, poisoning the batch simulation — wait for the navigator.
+        // After the skip window: the contract emits NavigatorGovernanceVoteSkipped
+        // instead of reverting, so we can include them in the batch.
         const nav = validatedMap.get(citizen)!
         const hasDecision = decisionsMap.get(nav) ?? false
-        if (!hasDecision) { waitingForDecision++; continue }
+        if (!hasDecision && !govSkipWindowReached) { waitingForDecision++; continue }
 
         const pref = preferredMap.get(citizen)
         if (isEarlyAccess && pref && pref !== myAddress) { skippedPreferred++; continue }
