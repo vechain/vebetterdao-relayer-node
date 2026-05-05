@@ -67,16 +67,22 @@ event AutoVotingToggled(address indexed account, bool enabled);
 
 ### Citizens: navigator delegation events
 
-`src/citizen-contracts.ts:getDelegatedCitizens` builds the citizen → navigator map from four `NavigatorRegistry` events:
+`NavigatorRegistry` emits six delegation-lifecycle events:
 
 ```solidity
 event DelegationCreated(address indexed citizen, address indexed navigator, uint256 amount);
+event DelegationIncreased(address indexed citizen, address indexed navigator, uint256 addedAmount, uint256 newTotal);
+event DelegationDecreased(address indexed citizen, address indexed navigator, uint256 removedAmount, uint256 newTotal);
 event DelegationRemoved(address indexed citizen, address indexed navigator, uint256 amount);
 event ExitAnnounced(address indexed navigator, uint256 announcedAtRound, uint256 effectiveDeadline);
 event NavigatorDeactivatedEvent(address indexed navigator, uint256 slashPercentage);
 ```
 
-The relayer fetches all four event types in parallel, **merges them, and replays in chronological order** (block, then clauseIndex, with a tie-breaker for events emitted in the same tx — `deactivated < exit < removed < created`). In-order replay is mandatory: if you process all `Create` events before all `Remove` events you can mis-handle a citizen who switched navigators mid-history.
+`src/citizen-contracts.ts:getDelegatedCitizens` only replays four of them — `Created`, `Removed`, `ExitAnnounced`, `NavigatorDeactivatedEvent` — because the relayer **only needs the citizen → navigator mapping**, not the delegation amount. `DelegationIncreased` / `DelegationDecreased` change the staked amount but not the mapping (the citizen stays delegated to the same navigator), so they're noise for vote-routing purposes.
+
+**You must scan Increased / Decreased if you display projected rewards or track per-citizen voting power.** The voting weight at a vote/claim is whatever `getDelegatedAmountAtTimepoint(citizen, snapshot)` returns — derived from the checkpointed amount, not the latest event. So even if you ignore Increased/Decreased for routing, if you want a "this citizen will receive ~X B3TR" estimate you need them.
+
+The relayer fetches all four routing events in parallel, **merges them, and replays in chronological order** (block, then clauseIndex, with a tie-breaker for events emitted in the same tx — `deactivated < exit < removed < created`). In-order replay is mandatory: if you process all `Create` events before all `Remove` events you can mis-handle a citizen who switched navigators mid-history.
 
 For each event:
 - `created` → set `citizen → navigator`
@@ -180,11 +186,14 @@ For each citizen, look up their navigator and check the cached map:
 The contract has a separate **skip window** — the last N blocks before deadline. Inside the skip window, calling `castNavigatorVote` for a citizen whose navigator hasn't decided **does not revert**: the contract emits `NavigatorVoteSkipped` / `NavigatorGovernanceVoteSkipped` and reduces the expected-action count for that citizen.
 
 ```
-Navigator alive + decision/prefs set            → vote normally
+Citizen failed personhood check at snapshot     → contract emits skip, reduces expected
 Navigator dead (deactivated/exited)             → contract emits skip, reduces expected
+Navigator alive + decision/prefs set            → vote normally
 Navigator alive + no decision + window reached  → contract emits skip, reduces expected
 Navigator alive + no decision + window NOT reached → REVERT (relayer must wait)
 ```
+
+The **personhood check** is worth highlighting: even if the citizen's navigator decided and you call `castNavigatorVote` early in the round, the contract still re-checks `VeBetterPassport.isPersonAtTimepoint(citizen, snapshot)` and emits the skip event if the citizen lacks a valid passport at the round/proposal snapshot. This is implicit — you don't need to pre-filter on personhood; the contract handles it gracefully. But it explains why a citizen with a "decided" navigator can still end up in the skipped set.
 
 The relayer reads the configurable thresholds:
 
@@ -566,6 +575,8 @@ citizen expected:    voteWeight + claimWeight             (allocation)
 
 `totalWeightedActions` decrements when the contract emits a skip event (`reduceUserAllocationVote`, `reduceUserGovernanceVote`) or when a relayer reduces a non-eligible auto-voter (`reduceExpectedActionsForRound`).
 
+**Claim auto-reduction:** when a user's allocation vote AND every cached governance proposal have all been reduced for that round, the contract additionally calls `_checkAndReduceClaim` which removes the user's `claimWeight` from `totalWeightedActions`. This means a citizen who is fully skipped (no allocation vote, no governance vote) **also** has their claim slot auto-removed — you don't need to call `claimReward` for them. If only some of the votes are skipped (e.g. allocation skipped but governance voted), the claim slot stays and you still need to either call `claimReward` (if they have rewards) or accept that the pool's `total` won't match `completed` for that one missing claim.
+
 ### What happens if you never process some users
 
 **They permanently inflate `totalWeightedActions` for that round.** Once the round/proposal exits the Active state, neither `castVoteOnBehalfOf` nor `castNavigatorVote` will accept the call (the contract reverts on state validation). The expected count is frozen and `completed >= total` will never hold. The pool stays locked for everyone.
@@ -678,12 +689,14 @@ Compact reference for what to scan when:
 | `NavigatorGovernanceVoteSkipped(citizen, navigator, proposalId)` | B3TRGovernor | Don't retry skipped citizens (governance) |
 | `RewardClaimedV2(cycle, voter, reward, gmReward)` | VoterRewards | Don't retry claims |
 | `DelegationCreated(citizen, navigator, amount)` | NavigatorRegistry | Citizen discovery |
+| `DelegationIncreased(citizen, navigator, addedAmount, newTotal)` | NavigatorRegistry | **Optional** — only if you track per-citizen amounts (rewards estimates). Citizen→navigator mapping unchanged. |
+| `DelegationDecreased(citizen, navigator, removedAmount, newTotal)` | NavigatorRegistry | **Optional** — same as above. |
 | `DelegationRemoved(citizen, navigator, amount)` | NavigatorRegistry | Citizen removal |
 | `ExitAnnounced(navigator, …)` | NavigatorRegistry | Lazy invalidate all citizens of that nav |
 | `NavigatorDeactivatedEvent(navigator, slashPercentage)` | NavigatorRegistry | Same as above |
 | `PreferredRelayerSet(user, relayer)` | RelayerRewardsPool | Build user→relayer preference for early access |
 
-Any caching layer must replay all four delegation events **in chronological order across types**, otherwise a citizen who switched navigators in a single tx ends up either deleted or pointing at the wrong navigator.
+Any caching layer must replay the routing events (`Created`, `Removed`, `ExitAnnounced`, `NavigatorDeactivatedEvent`) **in chronological order across types**, otherwise a citizen who switched navigators in a single tx ends up either deleted or pointing at the wrong navigator.
 
 ---
 
