@@ -7,8 +7,6 @@ services:
       - mnemonic
     environment:
       - RELAYER_NETWORK=mainnet
-      - PRIORITY_FEE_FACTOR=20  # optional overrides
-      - TIGHT_RECHECK=1
 
 secrets:
   mnemonic:
