@@ -7,6 +7,10 @@ export interface NetworkConfig {
   xAllocationPoolAddress: string
   b3trGovernorAddress: string
   navigatorRegistryAddress: string
+  /** Emissions contract — when set, the relayer races to call distribute() at
+   *  round end, bundling the call with the first batch of votes for a
+   *  competitive advantage. Optional; the bundle cycle is skipped when unset. */
+  emissionsAddress?: string
 }
 
 export interface RelayerSummary {

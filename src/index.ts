@@ -29,6 +29,7 @@ import {
   runCitizenGovernanceVoteCycle,
   runCitizenClaimRewardCycle,
 } from "./citizen-relayer"
+import { runDistributeBundleCycle } from "./distribute-bundle"
 import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
 import type { NetworkConfig, RelayerSummary } from "./types"
 
@@ -114,6 +115,20 @@ async function runAllCycles(
   refreshScreen: (s: RelayerSummary) => void,
 ) {
   const summary = await fetchSummary(thor, config, walletAddress)
+
+  // When the round has expired but the new one hasn't started, race to call
+  // distribute() bundled with the first batch of votes (auto-voters + citizens
+  // whose navigator pre-set preferences for the upcoming round).
+  if (!summary.isRoundActive && config.emissionsAddress) {
+    logRaw("")
+    logRaw(logSectionHeader("vote", summary.currentRoundId + 1))
+    const bundleResult = await runDistributeBundleCycle(thor, config, walletAddress, privateKey, dryRun, log)
+    if (bundleResult.totalUsers > 0 || bundleResult.txIds.length > 0) {
+      renderCycleResult(bundleResult).forEach(log)
+      // Refresh after distribute() — round is now active for the next cycles below.
+      Object.assign(summary, await fetchSummary(thor, config, walletAddress))
+    }
+  }
 
   if (summary.isRoundActive) {
     logRaw(logSectionHeader("vote", summary.currentRoundId))

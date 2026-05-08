@@ -22,6 +22,7 @@ export const MAINNET: NetworkConfig = {
   xAllocationPoolAddress: "0x4191776F05f4bE4848d3f4d587345078B439C7d3",
   b3trGovernorAddress: "0x1c65C25fABe2fc1bCb82f253fA0C916a322f777C",
   navigatorRegistryAddress: "0xef238e33fc78ecc79beaf8386254a0fc67d048e0",
+  emissionsAddress: "0xDf94739bd169C84fe6478D8420Bb807F1f47b135",
 }
 
 export const TESTNET_STAGING: NetworkConfig = {
@@ -50,6 +51,7 @@ function getSoloConfig(): NetworkConfig {
     xAllocationPoolAddress: required("X_ALLOCATION_POOL_ADDRESS"),
     b3trGovernorAddress: required("B3TR_GOVERNOR_ADDRESS"),
     navigatorRegistryAddress: required("NAVIGATOR_REGISTRY_ADDRESS"),
+    emissionsAddress: process.env.EMISSIONS_ADDRESS?.trim(),
   }
 }
 
