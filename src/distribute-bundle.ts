@@ -19,7 +19,9 @@ import {
   batchHasSetPreferences,
 } from "./citizen-contracts"
 
-const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
+const xAllocationVotingAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 // Inline ABI fragment — Emissions.distribute() has no args.
 const EMISSIONS_ABI = [
@@ -37,7 +39,7 @@ function buildDistributeClause(emissionsAddr: string): Clause {
 }
 
 function buildAutoVoteClause(xavAddr: string, roundId: number, user: string): Clause {
-  return Clause.callFunction(Address.of(xavAddr), xavAbi.getFunction("castVoteOnBehalfOf"), [user, roundId])
+  return Clause.callFunction(Address.of(xavAddr), xAllocationVotingAbi.getFunction("castVoteOnBehalfOf"), [user, roundId])
 }
 
 function buildNavigatorVoteClause(xavAddr: string, roundId: number, citizen: string): Clause {
@@ -47,6 +49,81 @@ function buildNavigatorVoteClause(xavAddr: string, roundId: number, citizen: str
 interface BundleSelection {
   autoVoters: string[]
   citizens: string[]
+}
+
+async function selectAutoVoters(
+  thor: ThorClient,
+  config: NetworkConfig,
+  newRoundId: number,
+  myAddress: string,
+  latestBlock: number,
+  isEarlyAccess: boolean,
+  log: LogFn,
+): Promise<string[]> {
+  // Auto-voters at latest block — the new round's snapshot will be set when
+  // distribute() runs inside the bundle, so we use latest as proxy.
+  const allAutoVoters = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, latestBlock)
+  const skippedSet = await getAlreadySkippedVotersForRound(
+    thor, config.xAllocationVotingAddress, newRoundId, latestBlock, latestBlock,
+  )
+  const preferredMap = await getPreferredRelayersForUsers(
+    thor, config.relayerRewardsPoolAddress, allAutoVoters, log,
+  )
+
+  const autoVoters: string[] = []
+  for (const user of allAutoVoters) {
+    if (skippedSet.has(user.toLowerCase())) continue
+    const pref = preferredMap.get(user.toLowerCase())
+    if (isEarlyAccess && pref && pref !== myAddress) continue
+    autoVoters.push(user)
+    if (autoVoters.length >= MAX_BUNDLE_VOTES) break
+  }
+  return autoVoters
+}
+
+async function selectCitizenVoters(
+  thor: ThorClient,
+  config: NetworkConfig,
+  newRoundId: number,
+  myAddress: string,
+  latestBlock: number,
+  isEarlyAccess: boolean,
+  log: LogFn,
+): Promise<string[]> {
+  if (!config.navigatorRegistryAddress || config.navigatorRegistryAddress === ZERO_ADDRESS) {
+    return []
+  }
+
+  try {
+    const delegationMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, latestBlock)
+    if (delegationMap.size === 0) return []
+
+    // Validate at the latest block (closest proxy for the new snapshot, which is set inside distribute())
+    const validatedMap = await getNavigatorsForCitizens(
+      thor, config.navigatorRegistryAddress, [...delegationMap.keys()], latestBlock, log,
+    )
+    const uniqueNavigators = [...new Set(validatedMap.values())]
+    const prefsMap = await batchHasSetPreferences(
+      thor, config.navigatorRegistryAddress, uniqueNavigators, newRoundId,
+    )
+    const citizenPreferred = await getPreferredRelayersForUsers(
+      thor, config.relayerRewardsPoolAddress, [...validatedMap.keys()], log,
+    )
+
+    const citizens: string[] = []
+    for (const [citizen, nav] of validatedMap) {
+      if (!(prefsMap.get(nav) ?? false)) continue // navigator hasn't pre-set → revert risk
+      const pref = citizenPreferred.get(citizen)
+      if (isEarlyAccess && pref && pref !== myAddress) continue
+      citizens.push(citizen)
+      if (citizens.length >= MAX_BUNDLE_VOTES) break
+    }
+    return citizens
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!msg.includes("reverted")) log(chalk.dim(`Bundle: citizen lookup failed: ${msg.slice(0, 80)}`))
+    return []
+  }
 }
 
 /**
@@ -64,63 +141,12 @@ async function selectBundleParticipants(
   log: LogFn,
 ): Promise<BundleSelection> {
   const myAddress = walletAddress.toLowerCase()
-
-  // Auto-voters at latest block — the new round's snapshot will be set when
-  // distribute() runs inside the bundle, so we use latest as proxy.
-  const allAutoVoters = await getAutoVotingUsers(thor, config.xAllocationVotingAddress, latestBlock)
-  const skippedSet = await getAlreadySkippedVotersForRound(
-    thor, config.xAllocationVotingAddress, newRoundId, latestBlock, latestBlock,
-  )
-
-  // Early access in a brand-new round — preferred-relayer filter still applies.
+  // brand-new round → always in early access, but preferred-relayer filter still applies
   const earlyAccessBlocks = await getEarlyAccessBlocks(thor, config.relayerRewardsPoolAddress)
-  const preferredMap = await getPreferredRelayersForUsers(
-    thor, config.relayerRewardsPoolAddress, allAutoVoters, log,
-  )
-  const isEarlyAccess = Number(earlyAccessBlocks) > 0 // brand-new round → always in early access
+  const isEarlyAccess = Number(earlyAccessBlocks) > 0
 
-  const autoVoters: string[] = []
-  for (const user of allAutoVoters) {
-    if (skippedSet.has(user.toLowerCase())) continue
-    const pref = preferredMap.get(user.toLowerCase())
-    if (isEarlyAccess && pref && pref !== myAddress) continue
-    autoVoters.push(user)
-    if (autoVoters.length >= MAX_BUNDLE_VOTES) break
-  }
-
-  // Citizens: only include those whose navigator has pre-set preferences for
-  // the upcoming round. Anything else would revert in the bundle.
-  const citizens: string[] = []
-  if (config.navigatorRegistryAddress && config.navigatorRegistryAddress !== "0x0000000000000000000000000000000000000000") {
-    try {
-      const delegationMap = await getDelegatedCitizens(thor, config.navigatorRegistryAddress, latestBlock)
-      if (delegationMap.size > 0) {
-        const allCitizens = [...delegationMap.keys()]
-        // Validate at the latest block (closest proxy for the new snapshot, which is set inside distribute())
-        const validatedMap = await getNavigatorsForCitizens(
-          thor, config.navigatorRegistryAddress, allCitizens, latestBlock, log,
-        )
-        const uniqueNavigators = [...new Set(validatedMap.values())]
-        const prefsMap = await batchHasSetPreferences(
-          thor, config.navigatorRegistryAddress, uniqueNavigators, newRoundId,
-        )
-        const citizenPreferred = await getPreferredRelayersForUsers(
-          thor, config.relayerRewardsPoolAddress, [...validatedMap.keys()], log,
-        )
-        for (const [citizen, nav] of validatedMap) {
-          if (!(prefsMap.get(nav) ?? false)) continue // navigator hasn't pre-set → revert risk
-          const pref = citizenPreferred.get(citizen)
-          if (isEarlyAccess && pref && pref !== myAddress) continue
-          citizens.push(citizen)
-          if (citizens.length >= MAX_BUNDLE_VOTES) break
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!msg.includes("reverted")) log(chalk.dim(`Bundle: citizen lookup failed: ${msg.slice(0, 80)}`))
-    }
-  }
-
+  const autoVoters = await selectAutoVoters(thor, config, newRoundId, myAddress, latestBlock, isEarlyAccess, log)
+  const citizens = await selectCitizenVoters(thor, config, newRoundId, myAddress, latestBlock, isEarlyAccess, log)
   return { autoVoters, citizens }
 }
 

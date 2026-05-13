@@ -105,6 +105,37 @@ function logRaw(msg: string) {
   console.log(msg)
 }
 
+async function runActiveRoundVotingCycles(
+  thor: ThorClient,
+  config: NetworkConfig,
+  walletAddress: string,
+  privateKey: string,
+  batchSize: number,
+  dryRun: boolean,
+  summary: RelayerSummary,
+) {
+  if (!summary.isRoundActive) {
+    log(chalk.dim("Round not active, skipping cast-vote"))
+    return
+  }
+
+  logRaw(logSectionHeader("vote", summary.currentRoundId))
+  const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(voteResult).forEach(log)
+
+  if (summary.citizenUsers === 0) return
+
+  logRaw("")
+  logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
+  const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(citizenVoteResult).forEach(log)
+
+  logRaw("")
+  logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
+  const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+}
+
 async function runAllCycles(
   thor: ThorClient,
   config: NetworkConfig,
@@ -130,25 +161,7 @@ async function runAllCycles(
     }
   }
 
-  if (summary.isRoundActive) {
-    logRaw(logSectionHeader("vote", summary.currentRoundId))
-    const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-    renderCycleResult(voteResult).forEach(log)
-
-    if (summary.citizenUsers > 0) {
-      logRaw("")
-      logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
-      const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-      renderCycleResult(citizenVoteResult).forEach(log)
-
-      logRaw("")
-      logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
-      const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-      for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
-    }
-  } else {
-    log(chalk.dim("Round not active, skipping cast-vote"))
-  }
+  await runActiveRoundVotingCycles(thor, config, walletAddress, privateKey, batchSize, dryRun, summary)
 
   logRaw("")
   logRaw(logSectionHeader("claim", summary.previousRoundId))
