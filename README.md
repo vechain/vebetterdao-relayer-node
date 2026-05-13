@@ -2,7 +2,9 @@
 
 Cast auto-votes, claim rewards, earn fees.
 
-[Relayers Docs](https://docs.vebetterdao.org/vebetter/automation) | [VeBetterDAO Docs](https://docs.vebetterdao.org) | [AI Skill](https://github.com/vechain/vebetterdao-relayer-node/blob/main/.agents/skills/auto-voting-relayers/SKILL.md)
+[Relayers Docs](https://docs.vebetterdao.org/vebetter/automation) | [VeBetterDAO Docs](https://docs.vebetterdao.org) | [Implementation Guide](./IMPLEMENTATION.md) | [AI Skill](https://github.com/vechain/vebetterdao-relayer-node/blob/main/.agents/skills/auto-voting-relayers/SKILL.md)
+
+> Building a custom relayer or porting to another stack? See **[IMPLEMENTATION.md](./IMPLEMENTATION.md)** for a deep dive into how the relayer decides what to call, which events to scan, and how navigator citizens are handled.
 
 ---
 

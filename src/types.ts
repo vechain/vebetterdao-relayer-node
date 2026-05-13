@@ -5,6 +5,12 @@ export interface NetworkConfig {
   voterRewardsAddress: string
   relayerRewardsPoolAddress: string
   xAllocationPoolAddress: string
+  b3trGovernorAddress: string
+  navigatorRegistryAddress: string
+  /** Emissions contract — when set, the relayer races to call distribute() at
+   *  round end, bundling the call with the first batch of votes for a
+   *  competitive advantage. Optional; the bundle cycle is skipped when unset. */
+  emissionsAddress?: string
 }
 
 export interface RelayerSummary {
@@ -22,6 +28,8 @@ export interface RelayerSummary {
   latestBlock: number
 
   autoVotingUsers: number
+  citizenUsers: number
+  activeProposals: number
   totalVoters: number
   totalVotes: bigint
 
@@ -56,7 +64,7 @@ export interface RelayerSummary {
 }
 
 export interface CycleResult {
-  phase: "vote" | "claim"
+  phase: "vote" | "claim" | "citizen-vote" | "citizen-governance" | "citizen-claim"
   roundId: number
   totalUsers: number
   successful: number

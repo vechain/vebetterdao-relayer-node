@@ -50,7 +50,7 @@ interface BatchOutcome {
   txIds: string[]
 }
 
-async function processBatch(
+export async function processBatch(
   thor: ThorClient,
   users: string[],
   clauseBuilder: (user: string) => Clause,
@@ -129,7 +129,9 @@ async function isolateAndRetry(
     try {
       const gas = await thor.gas.estimateGas([clauseBuilder(user)], walletAddress, { gasPadding: 0.1 })
       if (gas.reverted) {
-        const reason = gas.revertReasons?.[0] ? String(gas.revertReasons[0]) : "reverted"
+        const decoded = gas.revertReasons?.[0] ? String(gas.revertReasons[0]) : ""
+        const vmErr = gas.vmErrors?.[0] ?? ""
+        const reason = decoded || vmErr || "reverted"
         outcome.failed.push({ user, reason })
       } else {
         valid.push(user)

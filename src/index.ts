@@ -6,7 +6,7 @@
  * Env:
  *   MNEMONIC             BIP39 phrase (space-separated)
  *   RELAYER_PRIVATE_KEY   Hex private key (alternative to MNEMONIC)
- *   RELAYER_NETWORK       mainnet | testnet-staging (default: mainnet)
+ *   RELAYER_NETWORK       mainnet | testnet-staging | solo (default: mainnet)
  *   NODE_URL              Override Thor node URL
  *   BATCH_SIZE            Votes/claims per batch (default: 50)
  *   DRY_RUN               1/true to simulate only
@@ -24,7 +24,14 @@ import chalk from "chalk"
 import { getNetworkConfig, getNodePool } from "./config"
 import { fetchSummary } from "./contracts"
 import { runCastVoteCycle, runClaimRewardCycle } from "./relayer"
+import {
+  runCitizenAllocationVoteCycle,
+  runCitizenGovernanceVoteCycle,
+  runCitizenClaimRewardCycle,
+} from "./citizen-relayer"
+import { runDistributeBundleCycle } from "./distribute-bundle"
 import { renderSummary, renderCycleResult, logSectionHeader, timestamp } from "./display"
+import type { NetworkConfig, RelayerSummary } from "./types"
 
 const SECRETS_DIR = "/run/secrets"
 const ALLOWED_SECRETS = new Set(["mnemonic", "relayer_private_key"])
@@ -98,6 +105,78 @@ function logRaw(msg: string) {
   console.log(msg)
 }
 
+async function runActiveRoundVotingCycles(
+  thor: ThorClient,
+  config: NetworkConfig,
+  walletAddress: string,
+  privateKey: string,
+  batchSize: number,
+  dryRun: boolean,
+  summary: RelayerSummary,
+) {
+  if (!summary.isRoundActive) {
+    log(chalk.dim("Round not active, skipping cast-vote"))
+    return
+  }
+
+  logRaw(logSectionHeader("vote", summary.currentRoundId))
+  const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(voteResult).forEach(log)
+
+  if (summary.citizenUsers === 0) return
+
+  logRaw("")
+  logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
+  const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(citizenVoteResult).forEach(log)
+
+  logRaw("")
+  logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
+  const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+}
+
+async function runAllCycles(
+  thor: ThorClient,
+  config: NetworkConfig,
+  walletAddress: string,
+  privateKey: string,
+  batchSize: number,
+  dryRun: boolean,
+  refreshScreen: (s: RelayerSummary) => void,
+) {
+  const summary = await fetchSummary(thor, config, walletAddress)
+
+  // When the round has expired but the new one hasn't started, race to call
+  // distribute() bundled with the first batch of votes (auto-voters + citizens
+  // whose navigator pre-set preferences for the upcoming round).
+  if (!summary.isRoundActive && config.emissionsAddress) {
+    logRaw("")
+    logRaw(logSectionHeader("vote", summary.currentRoundId + 1))
+    const bundleResult = await runDistributeBundleCycle(thor, config, walletAddress, privateKey, dryRun, log)
+    if (bundleResult.totalUsers > 0 || bundleResult.txIds.length > 0) {
+      renderCycleResult(bundleResult).forEach(log)
+      // Refresh after distribute() — round is now active for the next cycles below.
+      Object.assign(summary, await fetchSummary(thor, config, walletAddress))
+    }
+  }
+
+  await runActiveRoundVotingCycles(thor, config, walletAddress, privateKey, batchSize, dryRun, summary)
+
+  logRaw("")
+  logRaw(logSectionHeader("claim", summary.previousRoundId))
+  const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(claimResult).forEach(log)
+
+  logRaw("")
+  logRaw(logSectionHeader("citizen-claim", summary.previousRoundId))
+  const citizenClaimResult = await runCitizenClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+  renderCycleResult(citizenClaimResult).forEach(log)
+
+  const updated = await fetchSummary(thor, config, walletAddress)
+  refreshScreen(updated)
+}
+
 async function main() {
   const network = process.env.RELAYER_NETWORK || "mainnet"
   const nodeUrlOverride = process.env.NODE_URL?.trim()
@@ -162,25 +241,7 @@ async function main() {
     let lastErr: unknown
     for (let attempt = 1; attempt <= CYCLE_RETRIES; attempt++) {
       try {
-        const summary = await fetchSummary(thor, config, walletAddress)
-
-        // Run cycles
-        if (summary.isRoundActive) {
-          logRaw(logSectionHeader("vote", summary.currentRoundId))
-          const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-          renderCycleResult(voteResult).forEach(log)
-        } else {
-          log(chalk.dim("Round not active, skipping cast-vote"))
-        }
-
-        logRaw("")
-        logRaw(logSectionHeader("claim", summary.previousRoundId))
-        const claimResult = await runClaimRewardCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-        renderCycleResult(claimResult).forEach(log)
-
-        // Render once after all work is done
-        const updated = await fetchSummary(thor, config, walletAddress)
-        refreshScreen(updated)
+        await runAllCycles(thor, config, walletAddress, privateKey, batchSize, dryRun, refreshScreen)
 
         lastErr = undefined
         break
