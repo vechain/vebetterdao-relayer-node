@@ -125,7 +125,17 @@ describe("getDelegatedCitizens — chronological replay", () => {
     expect(map.get(C1.toLowerCase())).toBe(NAV_B.toLowerCase())
   })
 
-  it("ExitAnnounced removes ALL citizens of that navigator (lazy invalidation)", async () => {
+  // Behaviour deliberately inverted (was: "removes ALL citizens, lazy invalidation").
+  //
+  // An exit announcement does not make a navigator dead. Verified against mainnet round
+  // 110: for a navigator with isExiting=true / isDeactivated=false, castNavigatorVote
+  // succeeded at every block of the round. Dropping its citizens here meant they were
+  // never voted for and never skipped, so the round's expected actions could never be
+  // met and the entire relayer reward pool locked permanently.
+  //
+  // Citizens who genuinely aren't delegated any more are filtered out authoritatively by
+  // getNavigatorsForCitizens(citizens, snapshot); this map is a candidate superset.
+  it("ExitAnnounced keeps the navigator's citizens (exit != dead)", async () => {
     const { citizen } = await freshlyLoad()
     const thor = mockThorWithEvents([
       {
@@ -145,12 +155,17 @@ describe("getDelegatedCitizens — chronological replay", () => {
     ])
 
     const map = await citizen.getDelegatedCitizens(thor, addr("9a71"), 1000)
-    expect(map.has(C1.toLowerCase())).toBe(false)
-    expect(map.has(C2.toLowerCase())).toBe(false)
+    expect(map.get(C1.toLowerCase())).toBe(NAV_A.toLowerCase())
+    expect(map.get(C2.toLowerCase())).toBe(NAV_A.toLowerCase())
     expect(map.get(C3.toLowerCase())).toBe(NAV_B.toLowerCase()) // C3 unaffected
   })
 
-  it("NavigatorDeactivatedEvent removes ALL citizens of that navigator", async () => {
+  // Also inverted, for a different reason: a deactivated navigator IS dead, but the
+  // citizens still have to stay in the work list. castNavigatorVote's dead-navigator
+  // branch calls reduceUserAllocationVote, and that on-chain skip is the only thing that
+  // brings the round's expected actions back down. Drop the citizens and nobody ever
+  // makes the call, so the pool stays locked.
+  it("NavigatorDeactivatedEvent keeps citizens so the on-chain skip can still run", async () => {
     const { citizen } = await freshlyLoad()
     const thor = mockThorWithEvents([
       {
@@ -169,7 +184,7 @@ describe("getDelegatedCitizens — chronological replay", () => {
     ])
 
     const map = await citizen.getDelegatedCitizens(thor, addr("9a71"), 1000)
-    expect(map.has(C1.toLowerCase())).toBe(false)
+    expect(map.get(C1.toLowerCase())).toBe(NAV_A.toLowerCase())
     expect(map.get(C2.toLowerCase())).toBe(NAV_B.toLowerCase())
   })
 })

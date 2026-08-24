@@ -1,6 +1,7 @@
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
 import { LogFn } from "./types"
+import { simulateAllClauses } from "./simulate"
 
 // ── Inline ABI fragments (contracts package not yet published with these) ──
 
@@ -170,8 +171,10 @@ async function batchSimulate<T>(
       data: fn.encodeData(encodeArgs(k)).toString(),
     }))
 
-    const results = await thor.transactions.simulateTransaction(clauses)
-    for (let j = 0; j < results.length; j++) {
+    // Thor truncates a batch at the first reverting clause; simulateAllClauses
+    // resumes past it so a single revert can't silently drop the rest of the chunk.
+    const results = await simulateAllClauses(thor, clauses)
+    for (let j = 0; j < chunk.length; j++) {
       const val = decode(chunk[j], results[j])
       if (val !== undefined) result.set(chunk[j].toLowerCase(), val)
     }
@@ -427,12 +430,7 @@ async function collectEventLogs(
   return events
 }
 
-function removeCitizensOfNavigator(nav: string): void {
-  const lc = nav.toLowerCase()
-  for (const [citizen, citizenNav] of citizenCache.delegations) {
-    if (citizenNav === lc) citizenCache.delegations.delete(citizen)
-  }
-}
+
 
 export async function getDelegatedCitizens(
   thor: ThorClient,
@@ -489,10 +487,22 @@ export async function getDelegatedCitizens(
         citizenCache.delegations.delete((event.args.citizen as string).toLowerCase())
         break
       case 'exit':
-        removeCitizensOfNavigator(event.args.navigator as string)
-        break
       case 'deactivated':
-        removeCitizensOfNavigator(event.args.navigator as string)
+        // Deliberately a no-op for the delegation map.
+        //
+        // A navigator announcing exit is NOT dead: verified on mainnet round 110,
+        // castNavigatorVote succeeded for citizens of a navigator with
+        // isExiting=true / isDeactivated=false at every block of the round. Dropping
+        // them here meant they were never voted for AND never skipped, so the round's
+        // expected actions stayed unreachable and the whole pool locked.
+        //
+        // Even for a genuinely dead navigator the citizens must stay: castNavigatorVote
+        // takes the skip path and calls reduceUserAllocationVote, which is what keeps
+        // the round unlockable. Only a relayer calling the contract can do that.
+        //
+        // Citizens who really are no longer delegated are filtered out authoritatively
+        // by getNavigatorsForCitizens(citizens, snapshot) before any clause is built,
+        // so this map is a candidate superset, not the final work list.
         break
     }
   }

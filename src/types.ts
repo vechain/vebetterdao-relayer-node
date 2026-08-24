@@ -29,6 +29,8 @@ export interface RelayerSummary {
 
   autoVotingUsers: number
   citizenUsers: number
+  /** True when the citizen fetch errored, so citizenUsers is unknown rather than genuinely 0. */
+  citizenFetchFailed: boolean
   activeProposals: number
   totalVoters: number
   totalVotes: bigint
