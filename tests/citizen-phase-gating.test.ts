@@ -72,6 +72,21 @@ describe("citizen phase gating", () => {
     expect(citizenRelayer.runCitizenGovernanceVoteCycle).toHaveBeenCalledTimes(1)
   })
 
+  it("survives a governance-phase throw so the claim phases still get to run", async () => {
+    // The governance phase used to sit outside the try, so a throw there propagated out of
+    // runAllCycles and starved both claim phases — the very failure the containment exists
+    // to prevent, left half-open.
+    vi.mocked(citizenRelayer.runCitizenGovernanceVoteCycle).mockRejectedValueOnce(new Error("governor unreachable"))
+    await expect(run(summary({ citizenUsers: 181 }))).resolves.not.toThrow()
+    expect(citizenRelayer.runCitizenAllocationVoteCycle).toHaveBeenCalledTimes(1)
+  })
+
+  it("survives both citizen phases throwing", async () => {
+    vi.mocked(citizenRelayer.runCitizenAllocationVoteCycle).mockRejectedValueOnce(new Error("RPC down"))
+    vi.mocked(citizenRelayer.runCitizenGovernanceVoteCycle).mockRejectedValueOnce(new Error("governor unreachable"))
+    await expect(run(summary({ citizenUsers: 181 }))).resolves.not.toThrow()
+  })
+
   it("skips every voting phase when the round is not active", async () => {
     await run(summary({ isRoundActive: false, citizenUsers: 181 }))
     expect(citizenRelayer.runCitizenAllocationVoteCycle).not.toHaveBeenCalled()

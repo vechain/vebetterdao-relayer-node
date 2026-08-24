@@ -131,9 +131,12 @@ export async function runActiveRoundVotingCycles(
     log(chalk.yellow("Citizen count unknown (fetch failed) - running citizen cycles anyway"))
   }
 
-  // Contained on purpose: a throw here would abort runAllCycles and starve the claim
-  // phases that run after it, every cycle, for as long as the failure persists. Fail
-  // loudly, but only lose the citizen phases.
+  // Both citizen phases are contained, and contained separately.
+  //
+  // A throw that escapes here aborts runAllCycles and starves the claim phases that run
+  // after it — every cycle, for as long as the failure persists. Catching per phase also
+  // means a failing allocation cycle doesn't cost us the governance votes, or vice versa.
+  // Fail loudly, but lose only the phase that actually broke.
   try {
     logRaw("")
     logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
@@ -143,10 +146,14 @@ export async function runActiveRoundVotingCycles(
     log(chalk.red(`ERROR: citizen-vote cycle failed: ${err instanceof Error ? err.message : String(err)}`))
   }
 
-  logRaw("")
-  logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
-  const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-  for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+  try {
+    logRaw("")
+    logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
+    const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+    for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+  } catch (err) {
+    log(chalk.red(`ERROR: citizen-governance cycle failed: ${err instanceof Error ? err.message : String(err)}`))
+  }
 }
 
 async function runAllCycles(
