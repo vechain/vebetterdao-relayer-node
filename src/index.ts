@@ -105,7 +105,7 @@ function logRaw(msg: string) {
   console.log(msg)
 }
 
-async function runActiveRoundVotingCycles(
+export async function runActiveRoundVotingCycles(
   thor: ThorClient,
   config: NetworkConfig,
   walletAddress: string,
@@ -123,17 +123,37 @@ async function runActiveRoundVotingCycles(
   const voteResult = await runCastVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
   renderCycleResult(voteResult).forEach(log)
 
-  if (summary.citizenUsers === 0) return
+  // Only skip when we actually know there are no citizens. If the fetch failed the count
+  // is unknown, so still run the cycles — they re-derive the citizen set themselves and
+  // may well succeed where the summary call didn't.
+  if (summary.citizenUsers === 0 && !summary.citizenFetchFailed) return
+  if (summary.citizenFetchFailed) {
+    log(chalk.yellow("Citizen count unknown (fetch failed) - running citizen cycles anyway"))
+  }
 
-  logRaw("")
-  logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
-  const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-  renderCycleResult(citizenVoteResult).forEach(log)
+  // Both citizen phases are contained, and contained separately.
+  //
+  // A throw that escapes here aborts runAllCycles and starves the claim phases that run
+  // after it — every cycle, for as long as the failure persists. Catching per phase also
+  // means a failing allocation cycle doesn't cost us the governance votes, or vice versa.
+  // Fail loudly, but lose only the phase that actually broke.
+  try {
+    logRaw("")
+    logRaw(logSectionHeader("citizen-vote", summary.currentRoundId))
+    const citizenVoteResult = await runCitizenAllocationVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+    renderCycleResult(citizenVoteResult).forEach(log)
+  } catch (err) {
+    log(chalk.red(`ERROR: citizen-vote cycle failed: ${err instanceof Error ? err.message : String(err)}`))
+  }
 
-  logRaw("")
-  logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
-  const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
-  for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+  try {
+    logRaw("")
+    logRaw(logSectionHeader("citizen-governance", summary.currentRoundId))
+    const citizenGovResults = await runCitizenGovernanceVoteCycle(thor, config, walletAddress, privateKey, batchSize, dryRun, log)
+    for (const r of citizenGovResults) renderCycleResult(r).forEach(log)
+  } catch (err) {
+    log(chalk.red(`ERROR: citizen-governance cycle failed: ${err instanceof Error ? err.message : String(err)}`))
+  }
 }
 
 async function runAllCycles(
@@ -216,7 +236,10 @@ async function main() {
   process.on("SIGINT", shutdown)
   process.on("SIGTERM", shutdown)
 
-  const CYCLE_RETRIES = nodePool.length
+  // At least 3 attempts even with a single node. Previously this was nodePool.length,
+  // so any deployment setting NODE_URL (and all of testnet-staging) got exactly one
+  // attempt with no backoff: one transient RPC blip lost the whole cycle.
+  const CYCLE_RETRIES = Math.max(3, nodePool.length)
   const CYCLE_RETRY_MS = 3000
 
   function refreshScreen(summary: Awaited<ReturnType<typeof fetchSummary>>) {
@@ -269,4 +292,8 @@ async function main() {
   }
 }
 
-main()
+// Only auto-start when run as the CLI entry point, so the cycle functions above can be
+// imported and exercised by tests without booting a relayer.
+if (require.main === module) {
+  main()
+}

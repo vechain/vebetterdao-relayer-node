@@ -1,6 +1,7 @@
 import { ThorClient } from "@vechain/sdk-network"
 import { ABIContract, Hex } from "@vechain/sdk-core"
 import { LogFn } from "./types"
+import { simulateAllClauses } from "./simulate"
 import {
   XAllocationVoting__factory,
   VoterRewards__factory,
@@ -196,8 +197,9 @@ export async function getPreferredRelayersForUsers(
       data: fn.encodeData([user]).toString(),
     }))
 
-    const results = await thor.transactions.simulateTransaction(clauses)
-    for (let j = 0; j < results.length; j++) {
+    // Thor truncates a batch at the first reverting clause; resume past it.
+    const results = await simulateAllClauses(thor, clauses, log)
+    for (let j = 0; j < chunk.length; j++) {
       const sim = results[j]
       if (!sim || sim.reverted || !sim.data || sim.data === "0x") continue
 
@@ -462,6 +464,7 @@ export async function fetchSummary(
 
   // Citizen / navigator data (graceful fallback if contracts not deployed)
   let citizenUsers = 0
+  let citizenFetchFailed = false
   let activeProposalCount = 0
   const navAddr = config.navigatorRegistryAddress
   const govAddr = config.b3trGovernorAddress
@@ -472,7 +475,12 @@ export async function fetchSummary(
       citizenUsers = citizenMap.size
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (!msg.includes("reverted")) console.error(`Warning: citizen fetch failed: ${msg}`)
+      // Never downgrade this to silence. Reporting a failed fetch as "0 citizens" is
+      // indistinguishable from "this network has no citizens", and the caller then skips
+      // both citizen voting phases for the whole cycle. That is how citizens go a full
+      // round without a vote or a skip, which locks the round's reward pool.
+      citizenFetchFailed = true
+      console.error(`ERROR: citizen fetch failed, citizen count unknown: ${msg}`)
     }
   }
   if (govAddr && govAddr !== ZERO) {
@@ -565,6 +573,7 @@ export async function fetchSummary(
     latestBlock,
     autoVotingUsers,
     citizenUsers,
+    citizenFetchFailed,
     activeProposals: activeProposalCount,
     totalVoters,
     totalVotes,
