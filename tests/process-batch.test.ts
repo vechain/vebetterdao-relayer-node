@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { Address, Clause } from "@vechain/sdk-core"
-import { processBatch } from "../src/relayer"
+import { processBatch, packByGas, MAX_TX_GAS } from "../src/relayer"
 import { createMockThor, type MockThor } from "./helpers/mockThor"
 import { addr, captureLogs } from "./helpers/builders"
 
@@ -228,5 +228,63 @@ describe("processBatch", () => {
     expect(result.failed[0].user).toBe(addr(1))
     expect(result.failed[0].reason).toContain("HTTP 503")
     expect(result.successful).toBe(1) // user2
+  })
+
+  it("splits a batch whose estimated gas exceeds the tx cap", async () => {
+    const { log, lines } = captureLogs()
+    const users = [addr(1), addr(2), addr(3), addr(4)]
+
+    thor.scriptGasEstimate([
+      { totalGas: MAX_TX_GAS + 1, reverted: false, revertReasons: [], vmErrors: [] }, // 4 users
+      { totalGas: 8_000_000, reverted: false, revertReasons: [], vmErrors: [] }, // first half
+      { totalGas: 8_000_000, reverted: false, revertReasons: [], vmErrors: [] }, // second half
+    ])
+
+    const result = await processBatch(thor as any, users, makeClauseBuilder(), WALLET, FAKE_PK, 50, true, log)
+
+    expect(result.successful).toBe(4)
+    expect(result.transient).toEqual([])
+    expect(result.txIds).toEqual(["DRY_RUN_2", "DRY_RUN_3"])
+    expect(lines.some((l) => /exceeds tx cap/.test(l))).toBe(true)
+  })
+
+  it("marks a single user above the tx cap as failed, not transient", async () => {
+    const { log } = captureLogs()
+    thor.scriptGasEstimate([{ totalGas: MAX_TX_GAS + 1, reverted: false, revertReasons: [], vmErrors: [] }])
+
+    const result = await processBatch(thor as any, [addr(1)], makeClauseBuilder(), WALLET, FAKE_PK, 50, true, log)
+
+    expect(result.successful).toBe(0)
+    expect(result.transient).toEqual([])
+    expect(result.failed[0].reason).toMatch(/exceeds tx cap/)
+  })
+
+  it("splits when the node rejects the tx for exceeding the gas cap", async () => {
+    const { log } = captureLogs()
+    const users = [addr(1), addr(2)]
+    thor.transactions.sendTransaction.mockImplementationOnce(async () => {
+      throw new Error("HTTP 400 - bad tx: tx gas limit exceeds the maximum allowed")
+    })
+
+    const result = await processBatch(thor as any, users, makeClauseBuilder(), WALLET, FAKE_PK, 50, false, log)
+
+    expect(result.successful).toBe(2)
+    expect(result.transient).toEqual([])
+    expect(thor.transactions.sendTransaction).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe("packByGas", () => {
+  it("packs users into chunks that stay within the tx cap", () => {
+    const entries = Array.from({ length: 50 }, (_, i) => ({ user: addr(i + 1), gas: 917_000 }))
+    const chunks = packByGas(entries)
+
+    expect(chunks.flat()).toHaveLength(50)
+    for (const chunk of chunks) expect(chunk.length * 917_000).toBeLessThanOrEqual(MAX_TX_GAS)
+    expect(chunks[0]).toHaveLength(17)
+  })
+
+  it("keeps everything in one chunk when it fits", () => {
+    expect(packByGas([{ user: addr(1), gas: 100 }, { user: addr(2), gas: 100 }])).toEqual([[addr(1), addr(2)]])
   })
 })

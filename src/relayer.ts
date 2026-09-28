@@ -21,7 +21,9 @@ import {
 const xavAbi = ABIContract.ofAbi(XAllocationVoting__factory.abi)
 const vrAbi = ABIContract.ofAbi(VoterRewards__factory.abi)
 
-const MAX_GAS = 40_000_000
+// Interstellar (EIP-7825) makes the txpool reject any tx declaring more than
+// 16,777,216 gas. Stay below it with some headroom.
+export const MAX_TX_GAS = 16_000_000
 
 // ── Clause builders ─────────────────────────────────────────
 
@@ -61,16 +63,22 @@ export async function processBatch(
   log: LogFn,
 ): Promise<BatchOutcome> {
   const outcome: BatchOutcome = { successful: 0, failed: [], transient: [], txIds: [] }
-  const queue = [...users]
+  const pending: string[][] = []
+  for (let i = 0; i < users.length; i += batchSize) pending.push(users.slice(i, i + batchSize))
   let batchNum = 0
-  const totalBatches = Math.ceil(queue.length / batchSize)
 
-  while (queue.length > 0) {
+  // Halve an oversized batch and put both halves back at the front of the queue.
+  const split = (batch: string[]) => {
+    const mid = Math.ceil(batch.length / 2)
+    pending.unshift(batch.slice(0, mid), batch.slice(mid))
+  }
+
+  while (pending.length > 0) {
     batchNum++
-    const batch = queue.splice(0, batchSize)
+    const batch = pending.shift()!
     const clauses = batch.map(clauseBuilder)
 
-    log(chalk.dim(`Batch ${batchNum}/${totalBatches} (${batch.length} users): simulating...`))
+    log(chalk.dim(`Batch ${batchNum}/${batchNum + pending.length} (${batch.length} users): simulating...`))
 
     try {
       const gasResult = await thor.gas.estimateGas(clauses, walletAddress, { gasPadding: 0.1 })
@@ -78,6 +86,16 @@ export async function processBatch(
       if (gasResult.reverted) {
         log(`Batch ${batchNum}: gas estimation failed, isolating failures...`)
         await isolateAndRetry(thor, batch, clauseBuilder, walletAddress, privateKey, dryRun, outcome, log)
+        continue
+      }
+
+      if (gasResult.totalGas > MAX_TX_GAS) {
+        if (batch.length > 1) {
+          log(`Batch ${batchNum}: gas ${gasResult.totalGas} exceeds tx cap ${MAX_TX_GAS}, splitting...`)
+          split(batch)
+        } else {
+          outcome.failed.push({ user: batch[0], reason: `gas ${gasResult.totalGas} exceeds tx cap ${MAX_TX_GAS}` })
+        }
         continue
       }
 
@@ -103,6 +121,11 @@ export async function processBatch(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      if (isTxGasCapError(msg) && batch.length > 1) {
+        log(`Batch ${batchNum}: rejected for exceeding tx gas cap, splitting...`)
+        split(batch)
+        continue
+      }
       log(`Batch ${batchNum}: error - ${msg.slice(0, 100)}`)
       await isolateAndRetry(thor, batch, clauseBuilder, walletAddress, privateKey, dryRun, outcome, log)
     }
@@ -111,6 +134,28 @@ export async function processBatch(
   }
 
   return outcome
+}
+
+function isTxGasCapError(msg: string): boolean {
+  return msg.includes("exceeds the maximum allowed") || msg.includes("exceeds block gas limit")
+}
+
+/** Greedily pack users into chunks whose summed per-user gas stays within MAX_TX_GAS. */
+export function packByGas(entries: { user: string; gas: number }[]): string[][] {
+  const chunks: string[][] = []
+  let current: string[] = []
+  let currentGas = 0
+  for (const { user, gas } of entries) {
+    if (current.length > 0 && currentGas + gas > MAX_TX_GAS) {
+      chunks.push(current)
+      current = []
+      currentGas = 0
+    }
+    current.push(user)
+    currentGas += gas
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
 }
 
 async function isolateAndRetry(
@@ -123,7 +168,7 @@ async function isolateAndRetry(
   outcome: BatchOutcome,
   log: LogFn,
 ): Promise<void> {
-  const valid: string[] = []
+  const valid: { user: string; gas: number }[] = []
 
   for (const user of users) {
     try {
@@ -133,8 +178,10 @@ async function isolateAndRetry(
         const vmErr = gas.vmErrors?.[0] ?? ""
         const reason = decoded || vmErr || "reverted"
         outcome.failed.push({ user, reason })
+      } else if (gas.totalGas > MAX_TX_GAS) {
+        outcome.failed.push({ user, reason: `gas ${gas.totalGas} exceeds tx cap ${MAX_TX_GAS}` })
       } else {
-        valid.push(user)
+        valid.push({ user, gas: gas.totalGas })
       }
     } catch (err) {
       outcome.failed.push({ user, reason: err instanceof Error ? err.message : String(err) })
@@ -144,33 +191,41 @@ async function isolateAndRetry(
 
   if (valid.length === 0) return
 
+  const chunks = packByGas(valid)
+
   if (dryRun) {
     outcome.successful += valid.length
-    outcome.txIds.push("DRY_RUN_ISOLATED")
-    log(`Isolated: ${valid.length} valid, ${users.length - valid.length} failed (dry run)`)
+    chunks.forEach(() => outcome.txIds.push("DRY_RUN_ISOLATED"))
+    log(`Isolated: ${valid.length} valid in ${chunks.length} tx(s), ${users.length - valid.length} failed (dry run)`)
     return
   }
 
-  const clauses = valid.map(clauseBuilder)
-  try {
-    const gas = await thor.gas.estimateGas(clauses, walletAddress, { gasPadding: 0.1 })
-    if (gas.reverted) {
-      valid.forEach((u) => outcome.transient.push({ user: u, reason: "retry reverted" }))
-      return
+  for (const chunk of chunks) {
+    const clauses = chunk.map(clauseBuilder)
+    try {
+      const gas = await thor.gas.estimateGas(clauses, walletAddress, { gasPadding: 0.1 })
+      if (gas.reverted) {
+        chunk.forEach((u) => outcome.transient.push({ user: u, reason: "retry reverted" }))
+        continue
+      }
+      if (gas.totalGas > MAX_TX_GAS) {
+        chunk.forEach((u) => outcome.transient.push({ user: u, reason: "retry exceeds tx gas cap" }))
+        continue
+      }
+      const body = await thor.transactions.buildTransactionBody(clauses, gas.totalGas)
+      const signed = Transaction.of(body).sign(Buffer.from(privateKey, "hex"))
+      const sent = await thor.transactions.sendTransaction(signed)
+      const receipt = await thor.transactions.waitForTransaction(sent.id)
+      if (receipt && !receipt.reverted) {
+        outcome.successful += chunk.length
+        outcome.txIds.push(sent.id)
+        log(`Isolated: ✓ ${chunk.length} OK (tx: ${sent.id.slice(0, 10)}...)`)
+      } else {
+        chunk.forEach((u) => outcome.transient.push({ user: u, reason: "tx reverted on retry" }))
+      }
+    } catch {
+      chunk.forEach((u) => outcome.transient.push({ user: u, reason: "network error on retry" }))
     }
-    const body = await thor.transactions.buildTransactionBody(clauses, gas.totalGas)
-    const signed = Transaction.of(body).sign(Buffer.from(privateKey, "hex"))
-    const sent = await thor.transactions.sendTransaction(signed)
-    const receipt = await thor.transactions.waitForTransaction(sent.id)
-    if (receipt && !receipt.reverted) {
-      outcome.successful += valid.length
-      outcome.txIds.push(sent.id)
-      log(`Isolated: ✓ ${valid.length} OK (tx: ${sent.id.slice(0, 10)}...)`)
-    } else {
-      valid.forEach((u) => outcome.transient.push({ user: u, reason: "tx reverted on retry" }))
-    }
-  } catch {
-    valid.forEach((u) => outcome.transient.push({ user: u, reason: "network error on retry" }))
   }
 }
 
