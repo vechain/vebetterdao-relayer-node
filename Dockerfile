@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:22.23.4-alpine AS builder
 RUN apk add --no-cache tini
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -8,7 +8,7 @@ COPY src ./src
 RUN NODE_OPTIONS=--max-old-space-size=4096 npx tsc
 RUN npm prune --production
 
-FROM node:20-alpine3.23
+FROM node:22.23.4-alpine
 RUN apk update && apk upgrade -U && rm -rf /var/cache/apk/*
 # Drop npm from the runtime image. The container runs `node dist/index.js` and never
 # shells out to npm, but npm bundles its own dependency tree — including tar 6.2.1, which

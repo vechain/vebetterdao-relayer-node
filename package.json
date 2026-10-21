@@ -20,7 +20,7 @@
     "publish:npm": "npm publish --access public"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@vechain/sdk-core": "2.0.7",
