@@ -14,7 +14,7 @@ Not part of the b3tr monorepo. This is a self-contained Node.js project.
 - `@vechain/sdk-core` + `@vechain/sdk-network` for blockchain interaction
 - `@vechain/vebetterdao-contracts` for contract ABIs (typechain factories)
 - `chalk` v4 (CJS) for terminal colors
-- Node.js 20+
+- Node.js 22+
 
 ## Architecture
 
